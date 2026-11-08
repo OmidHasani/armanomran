@@ -1,0 +1,15 @@
+[Unit]
+Description=Arman Holding CRM
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/arman-crm
+EnvironmentFile=/opt/arman-crm/.env
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

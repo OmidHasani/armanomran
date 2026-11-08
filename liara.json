@@ -1,0 +1,9 @@
+{
+  "port": 3000,
+  "platform": "node",
+  "node": {
+    "version": "20",
+    "timezone": "Asia/Tehran",
+    "mirror": true
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "arman-holding-crm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test server/validate.test.js",
+    "smoke": "node scripts/smoke-flow.mjs",
+    "reset-admin": "node scripts/reset-admin.js"
+  },
+  "dependencies": {
+    "@fontsource/vazirmatn": "^5.2.8",
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.8.1",
+    "connect-mongo": "^5.1.0",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.1",
+    "express-session": "^1.18.2",
+    "helmet": "^8.1.0",
+    "mongodb": "^6.21.0",
+    "mongoose": "^8.19.1",
+    "sanitize-html": "^2.17.0",
+    "zod": "^3.25.76"
+  }
+}

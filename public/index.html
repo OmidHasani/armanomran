@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>CRM هلدینگ آرمان</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/styles.css?v=38">
+</head>
+<body>
+<div id="boot" class="boot">در حال بارگذاری سامانه…</div>
+<div id="login" class="login" hidden>
+  <form id="loginForm" class="login-card" autocomplete="on">
+    <h1>هلدینگ آرمان<small>ورود به سامانه مدیریت مشتریان و فروش</small></h1>
+    <label>نام کاربری<input name="username" autocomplete="username" required autofocus></label>
+    <label>رمز عبور<input name="password" type="password" autocomplete="current-password" required></label>
+    <p id="loginErr" class="login-err" hidden></p>
+    <button class="pri" type="submit">ورود</button>
+  </form>
+</div>
+<div class="app" id="shell" hidden>
+  <aside class="noprint">
+    <h1>هلدینگ آرمان<small>سامانه مدیریت مشتریان و فروش</small></h1>
+    <div id="nav"></div>
+    <div id="sidefoot" class="sidefoot"></div>
+  </aside>
+  <main id="main"></main>
+</div>
+<div id="modal"></div>
+<div id="toast"></div>
+<script src="/app.js?v=33"></script>
+<script src="/legal-ui.js?v=23"></script>
+<script src="/lease.js?v=23"></script>
+<script src="/invest.js?v=23"></script>
+<script src="/reserve.js?v=23"></script>
+<script src="/acct.js?v=31"></script>
+</body>
+</html>
