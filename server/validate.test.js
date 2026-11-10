@@ -541,3 +541,195 @@ test('rejects duplicate ledger payment reference against reservation', () => {
   }];
   assert.throws(() => validateState(raw), /شماره پیگیری.*تکراری/);
 });
+
+test('accepts unit dang split with owners summing to at most 6', () => {
+  const raw = base();
+  raw.customers.push({
+    id: 'cust0002',
+    name: 'سارا محمدی',
+    father: '',
+    nid: '0013542420',
+    bc: '',
+    phone: '09121234568',
+    addr: '',
+  });
+  Object.assign(raw.projects[0].units[0], {
+    dangSplit: true,
+    owners: [
+      { id: 'own0001', custId: 'cust0001', dang: 2, note: 'شمال' },
+      { id: 'own0002', custId: 'cust0002', dang: 3.5, note: '' },
+    ],
+  });
+  const data = validateState(raw);
+  const u = data.projects[0].units[0];
+  assert.equal(u.dangSplit, true);
+  assert.equal(u.owners.length, 2);
+  assert.equal(u.owners[0].dang, 2);
+  assert.equal(u.owners[1].dang, 3.5);
+});
+
+test('clears owners when dangSplit is off', () => {
+  const raw = base();
+  Object.assign(raw.projects[0].units[0], {
+    dangSplit: false,
+    owners: [{ id: 'own0001', custId: 'cust0001', dang: 2, note: '' }],
+  });
+  const data = validateState(raw);
+  assert.equal(data.projects[0].units[0].dangSplit, false);
+  assert.deepEqual(data.projects[0].units[0].owners, []);
+});
+
+test('clears invalid leftover owners when dangSplit is off', () => {
+  const raw = base();
+  Object.assign(raw.projects[0].units[0], {
+    dangSplit: false,
+    owners: [{ id: 'x', custId: 'bad', dang: 99, note: '' }],
+  });
+  const data = validateState(raw);
+  assert.equal(data.projects[0].units[0].dangSplit, false);
+  assert.deepEqual(data.projects[0].units[0].owners, []);
+});
+
+test('rejects dang sum over 6', () => {
+  const raw = base();
+  Object.assign(raw.projects[0].units[0], {
+    dangSplit: true,
+    owners: [
+      { id: 'own0001', custId: 'cust0001', dang: 4, note: '' },
+      { id: 'own0002', custId: 'cust0001', dang: 3, note: '' },
+    ],
+  });
+  // duplicate customer first — use second customer
+  raw.customers.push({
+    id: 'cust0002', name: 'سارا', father: '', nid: '0013542421', bc: '', phone: '09120000002', addr: '',
+  });
+  raw.projects[0].units[0].owners[1].custId = 'cust0002';
+  assert.throws(() => validateState(raw), /جمع دانگ/);
+});
+
+test('rejects unknown dang owner customer', () => {
+  const raw = base();
+  Object.assign(raw.projects[0].units[0], {
+    dangSplit: true,
+    owners: [{ id: 'own0001', custId: 'cust9999', dang: 2, note: '' }],
+  });
+  assert.throws(() => validateState(raw), /مشتری ناموجود/);
+});
+
+test('rejects duplicate customer on same unit dang owners', () => {
+  const raw = base();
+  Object.assign(raw.projects[0].units[0], {
+    dangSplit: true,
+    owners: [
+      { id: 'own0001', custId: 'cust0001', dang: 2, note: '' },
+      { id: 'own0002', custId: 'cust0001', dang: 1, note: '' },
+    ],
+  });
+  assert.throws(() => validateState(raw), /مشتری تکراری/);
+});
+
+test('still rejects two contracts on one unit with dang split', () => {
+  const raw = base();
+  raw.projects[0].units[0].dangSplit = true;
+  raw.customers.push({
+    id: 'cust0002', name: 'سارا', father: '', nid: '0013542422', bc: '', phone: '09120000003', addr: '',
+  });
+  const mk = (id, no, cust) => ({
+    id, no, type: 'invest', cust, proj: 'proj0001', unit: 'unit0001',
+    date: '1404/01/15', total: 1000, dur: '12', note: '',
+    inst: [{ id: id + 'i', title: 'قسط', amt: 1000, date: '1404/01/15', paid: false, pdate: '', ref: '' }],
+  });
+  raw.contracts.push(mk('cont0001', 'ق-۱۰۰۱', 'cust0001'), mk('cont0002', 'ق-۱۰۰۲', 'cust0002'));
+  assert.throws(() => validateState(raw), /دو قرارداد به یک واحد/);
+});
+
+test('accepts reservation convert with resId and reused payment refs', () => {
+  const raw = base();
+  raw.reservations.push({
+    id: 'resv0001',
+    no: 'ر-1001',
+    cust: 'cust0001',
+    proj: 'proj0001',
+    unit: 'unit0001',
+    need: 20000000,
+    fine: 1000000,
+    deadline: '1404/03/01',
+    date: '1404/02/01',
+    st: 'conv',
+    pays: [{
+      id: 'پ-1001', amt: 20000000, date: '1404/02/01', ref: 'RES-PAY-1', acct: '6037',
+      payer: 'علی رضایی', tp: false, rel: '', appv: '', s: 'used',
+    }],
+    by: 'کارشناس',
+    appr: 'مدیر',
+    log: [],
+  });
+  raw.contracts.push({
+    id: 'cont0001',
+    no: 'ق-۱۰۰۱',
+    type: 'invest',
+    cust: 'cust0001',
+    proj: 'proj0001',
+    unit: 'unit0001',
+    date: '1404/02/10',
+    total: 80000000,
+    resId: 'resv0001',
+    dur: '12',
+    note: '',
+    inst: [
+      {
+        id: 'instp001', title: 'پرداخت رزرو پ-1001', amt: 20000000, date: '1404/02/01',
+        paid: true, pdate: '1404/02/01', ref: 'RES-PAY-1', fromPayId: 'پ-1001', payer: 'علی رضایی', acct: '6037',
+      },
+      {
+        id: 'instu001', title: 'قسط ۱', amt: 60000000, date: '1404/03/01',
+        paid: false, pdate: '', ref: '',
+      },
+    ],
+  });
+  const data = validateState(raw);
+  assert.equal(data.contracts[0].resId, 'resv0001');
+  assert.equal(data.reservations[0].st, 'conv');
+  assert.equal(data.reservations[0].pays[0].s, 'used');
+  assert.equal(data.projects[0].units[0].st, 'sold');
+  assert.equal(data.contracts[0].inst[0].fromPayId, 'پ-1001');
+});
+
+test('rejects contract resId pointing to missing reservation', () => {
+  const raw = base();
+  raw.contracts.push({
+    id: 'cont0001',
+    no: 'ق-۱۰۰۱',
+    type: 'invest',
+    cust: 'cust0001',
+    proj: 'proj0001',
+    unit: 'unit0001',
+    date: '1404/02/10',
+    total: 1000,
+    resId: 'resvMissing',
+    dur: '12',
+    note: '',
+    inst: [{ id: 'inst0001', title: 'قسط', amt: 1000, date: '1404/02/10', paid: false, pdate: '', ref: '' }],
+  });
+  assert.throws(() => validateState(raw), /رزرو ناموجود/);
+});
+
+test('rejects two contracts linked to the same reservation', () => {
+  const raw = base();
+  raw.projects[0].units.push({
+    id: 'unit0002', no: '13', floor: '4', kind: 'مسکونی', area: 90, ppm: 1000000, total: 90000000, st: 'free',
+  });
+  raw.reservations.push({
+    id: 'resv0001', no: 'ر-1001', cust: 'cust0001', proj: 'proj0001', unit: 'unit0001',
+    need: 1000, fine: 100, deadline: '1404/03/01', date: '1404/02/01', st: 'conv',
+    pays: [{ id: 'پ-1001', amt: 1000, date: '1404/02/01', ref: 'X1', acct: '1', payer: 'علی', tp: false, rel: '', appv: '', s: 'used' }],
+    by: 'a', appr: 'b', log: [],
+  });
+  const mk = (id, no, unit) => ({
+    id, no, type: 'invest', cust: 'cust0001', proj: 'proj0001', unit,
+    date: '1404/02/10', total: 1000, resId: 'resv0001', dur: '12', note: '',
+    inst: [{ id: id + 'i', title: 'قسط', amt: 1000, date: '1404/02/10', paid: false, pdate: '', ref: '' }],
+  });
+  raw.contracts.push(mk('cont0001', 'ق-۱۰۰۱', 'unit0001'), mk('cont0002', 'ق-۱۰۰۲', 'unit0002'));
+  assert.throws(() => validateState(raw), /بیش از یک قرارداد به رزرو/);
+});

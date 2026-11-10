@@ -66,6 +66,15 @@ function projectDoc(project) {
       storageArea: Number(unit.storageArea) || 0,
       handReady: !!unit.handReady,
       handDate: unit.handDate || '',
+      dangSplit: !!unit.dangSplit,
+      owners: !!unit.dangSplit
+        ? (Array.isArray(unit.owners) ? unit.owners : []).map((owner) => ({
+          id: owner.id,
+          custId: owner.custId,
+          dang: Number(owner.dang) || 0,
+          note: owner.note || '',
+        }))
+        : [],
     })),
   };
 }
@@ -114,6 +123,19 @@ function contractDoc(contract) {
         paid: !!inst.paid,
         pdate: inst.pdate || '',
         ref: inst.ref || '',
+        fromPayId: inst.fromPayId || '',
+        payer: inst.payer || '',
+        acct: inst.acct || '',
+        pays: Array.isArray(inst.pays)
+          ? inst.pays.map((pay) => ({
+            id: pay.id,
+            amt: Number(pay.amt) || 0,
+            date: pay.date || '',
+            ref: pay.ref || '',
+            note: pay.note || '',
+            overFrom: pay.overFrom || '',
+          }))
+          : [],
         lateDays: Number(inst.lateDays) || 0,
         lateCalc: Number(inst.lateCalc) || 0,
         lateFee: Number(inst.lateFee) || 0,
@@ -127,6 +149,7 @@ function contractDoc(contract) {
     }),
     hand: contract.hand || '',
   };
+  if (contract.resId) doc.resId = contract.resId;
   if (typeof contract.auto === 'boolean') doc.auto = contract.auto;
   if (contract.fac?.length) doc.fac = contract.fac;
   if (contract.doc && typeof contract.doc === 'object') {

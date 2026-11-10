@@ -40,17 +40,17 @@
       floor: d.floor || u.floor || '',
       unitNo: d.unitNo || u.no || '',
       fromBank: d.fromBank || '',
-      supportPhone: d.supportPhone || PAY_DEFAULTS.supportPhone,
-      refundMonths: d.refundMonths != null && d.refundMonths !== '' ? Number(d.refundMonths) : PAY_DEFAULTS.refundMonths,
+      supportPhone: d.supportPhone ?? (r.doc ? '' : PAY_DEFAULTS.supportPhone),
+      refundMonths: d.refundMonths != null && d.refundMonths !== '' ? Number(d.refundMonths) : (r.doc ? Number(d.refundMonths) || 0 : PAY_DEFAULTS.refundMonths),
       schedule: [0, 1, 2, 3].map((i) => ({
         amt: sched[i]?.amt != null && sched[i]?.amt !== '' ? Number(sched[i].amt) : 0,
         date: sched[i]?.date || '',
       })),
-      payBank: d.payBank || PAY_DEFAULTS.payBank,
-      payCard: d.payCard || PAY_DEFAULTS.payCard,
-      paySheba: d.paySheba || PAY_DEFAULTS.paySheba,
-      payAcct: d.payAcct || PAY_DEFAULTS.payAcct,
-      payName: d.payName || PAY_DEFAULTS.payName,
+      payBank: d.payBank ?? (r.doc ? '' : PAY_DEFAULTS.payBank),
+      payCard: d.payCard ?? (r.doc ? '' : PAY_DEFAULTS.payCard),
+      paySheba: d.paySheba ?? (r.doc ? '' : PAY_DEFAULTS.paySheba),
+      payAcct: d.payAcct ?? (r.doc ? '' : PAY_DEFAULTS.payAcct),
+      payName: d.payName ?? (r.doc ? '' : PAY_DEFAULTS.payName),
     };
   }
 

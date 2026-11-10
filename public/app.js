@@ -18,13 +18,23 @@ const fullC=(c,cu,p,u,t)=>{const L=[['ماده ۱ – طرفین قرارداد'
  return L.map(([h,b])=>`<p><b>${h}:</b> ${b}</p>`).join('')};
 const UST={free:'آزاد',res:'رزرو',sold:'فروخته'};
 let S={projects:[],customers:[],contracts:[],reservations:[],leads:[],parties:[],ledger:[],checks:[],cfg:{},me:'',pn:1000,cn:1000,rn:1000,_v:0},V={n:'dash'},Q='';
-let ME={name:'',username:'',role:'',perms:[],unitIds:[]},USERS=[],ORG_UNITS=[],DIR_USERS=[],LEGAL=[],LEGAL_STATS={},WORK=[],WORK_STATS={},LEGAL_OPTS={caseStatus:[],caseKinds:[],followActions:[],followSubjects:[],followResults:[],perms:[],roles:{}},LEAD_DRAFT={},LEAD_FOCUS=null,UNIT_EDIT=null,UNIT_DUP_HINT=null,UNIT_FILTER='all',INST_EDIT=null,syncText='',saveTimer=null,saveBusy=false,saveQueued=false;
+let ME={name:'',username:'',role:'',perms:[],unitIds:[]},USERS=[],ORG_UNITS=[],DIR_USERS=[],LEGAL=[],LEGAL_STATS={},WORK=[],WORK_STATS={},LEGAL_OPTS={caseStatus:[],caseKinds:[],followActions:[],followSubjects:[],followResults:[],perms:[],roles:{}},LEAD_DRAFT={},LEAD_FOCUS=null,UNIT_EDIT=null,UNIT_DUP_HINT=null,UNIT_FILTER='all',UNIT_OWNERS_DRAFT=null,INST_EDIT=null,syncText='',saveTimer=null,saveBusy=false,saveQueued=false,localDirty=false,saveWaiters=[],syncConflict=false,versionWatchTimer=null;
+const DANG_MAX=6;
 const nowH=()=>{const d=new Date();return[d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':')};
 const actor=()=>ME.name||S.me||ME.username||'—';
 let LEAD_DND={id:null,from:null,dirty:false};
 const can=k=>ME.role==='admin'||(ME.perms||[]).includes(k);
 const roleLabel=r=>({admin:'مدیر',staff:'کارشناس فروش',legal:'واحد حقوقی'}[r]||r);
-const $=s=>document.querySelector(s),uid=()=>Math.random().toString(36).slice(2,9);
+const $=s=>document.querySelector(s);
+const uid=()=>{
+  try{
+    if(globalThis.crypto?.randomUUID){
+      const id=crypto.randomUUID().replace(/-/g,'').slice(0,16);
+      if(/^[a-z0-9]{4,32}$/i.test(id))return id;
+    }
+  }catch(e){}
+  return (Date.now().toString(36)+Math.random().toString(36).slice(2,10)).slice(0,16);
+};
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const F=s=>String(s).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d]);
 const N=s=>String(s).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[,٬،]/g,'').replace(/٫/g,'.');
@@ -82,10 +92,13 @@ function bumpCounters(){
 function repairLinks(){
   const sold=new Set(S.contracts.map(c=>c.proj+'|'+c.unit));
   const held=new Set(S.reservations.filter(r=>r.st==='active'||r.st==='cancelling').map(r=>r.proj+'|'+r.unit));
+  const custIds=new Set((S.customers||[]).map(c=>c.id));
   S.projects.forEach(p=>(p.units||[]).forEach(u=>{
     const k=p.id+'|'+u.id;
-    if(sold.has(k)&&held.has(k))return;
-    u.st=sold.has(k)?'sold':held.has(k)?'res':'free';
+    if(!(sold.has(k)&&held.has(k)))u.st=sold.has(k)?'sold':held.has(k)?'res':'free';
+    u.dangSplit=!!u.dangSplit;
+    u.owners=Array.isArray(u.owners)?u.owners.filter(o=>o&&custIds.has(o.custId)&&Number(o.dang)>0):[];
+    if(!u.dangSplit)u.owners=[];
   }));
 }
 function applyState(data,version){
@@ -108,9 +121,13 @@ function applyState(data,version){
   };
   S.projects.forEach(p=>{
     if(!Array.isArray(p.units))p.units=[];
-    p.units.forEach(u=>{u.ppmRaw=num(u.ppmRaw);u.totalRaw=num(u.totalRaw);u.ppm=num(u.ppm);u.total=num(u.total);u.area=num(u.area)});
+    p.units.forEach(u=>{
+      u.ppmRaw=num(u.ppmRaw);u.totalRaw=num(u.totalRaw);u.ppm=num(u.ppm);u.total=num(u.total);u.area=num(u.area);
+      u.dangSplit=!!u.dangSplit;
+      u.owners=Array.isArray(u.owners)?u.owners.map(o=>({id:o.id||uid(),custId:o.custId,dang:num(o.dang),note:o.note||''})):[]
+    });
   });
-  S.contracts.forEach(c=>{if(!Array.isArray(c.inst))c.inst=[]});
+  S.contracts.forEach(c=>{if(!Array.isArray(c.inst))c.inst=[];normalizeInstPays(c)});
   S.reservations.forEach(r=>{if(!Array.isArray(r.pays))r.pays=[];if(!Array.isArray(r.log))r.log=[]});
   if(!S.me&&ME.name)S.me=ME.name;
   repairLinks();
@@ -119,44 +136,170 @@ function applyState(data,version){
 function snapshot(){
   repairLinks();
   bumpCounters();
+  (S.contracts||[]).forEach(normalizeInstPays);
   const copy=JSON.parse(JSON.stringify(S));
   delete copy._v;
   return copy;
 }
-function save(){if(!can('write')&&!can('admin')&&!can('acct')){toast('اجازه ثبت و ویرایش ندارید');return}saveQueued=true;setSync('در حال ذخیره…');clearTimeout(saveTimer);saveTimer=setTimeout(flushSave,350)}
+function finishSaveWaiters(waiters,ok){
+  (waiters||[]).forEach(fn=>{try{fn(!!ok)}catch(e){}});
+}
+function canPersist(){return can('write')||can('admin')||can('acct')}
+function markLocalClean(){localDirty=false;syncConflict=false}
+/** ذخیره پس‌زمینه بدون قفل کردن پاپ‌آپ؛ بعد از بستن مودال صدا زده شود. */
+function persistAfter(okMsg,failMsg){
+  save().then(ok=>{
+    if(ok){if(okMsg)toast(okMsg)}
+    else toast(failMsg||'روی سرور ذخیره نشد. وضعیت همگام‌سازی را در پایین منو ببینید.');
+  }).catch(()=>toast(failMsg||'ذخیره با خطا روبه‌رو شد'));
+}
+async function persistNow(okMsg,failMsg){
+  const ok=await save();
+  if(ok){if(okMsg)toast(okMsg)}
+  else toast(failMsg||'روی سرور ذخیره نشد. وضعیت همگام‌سازی را در پایین منو ببینید.');
+  return ok;
+}
+/** صف ذخیره روی سرور؛ Promise وقتی این نوبت flush تمام شد resolve می‌شود. */
+function save(){
+  if(!canPersist()){toast('اجازه ثبت و ویرایش ندارید');return Promise.resolve(false)}
+  if(syncConflict){toast('ابتدا صفحه را با سرور همگام کنید');return Promise.resolve(false)}
+  localDirty=true;
+  saveQueued=true;
+  setSync('در حال ذخیره…');
+  const p=new Promise(resolve=>saveWaiters.push(resolve));
+  if(saveBusy)return p;
+  clearTimeout(saveTimer);
+  saveTimer=setTimeout(()=>{flushSave()},280);
+  return p;
+}
+async function reloadStateFromServer(opts){
+  opts=opts||{};
+  const res=await fetch('/api/state',{credentials:'same-origin'});
+  if(res.status===401){showLogin();return false}
+  const body=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(body.message||'بارگذاری ناموفق');
+  clearTimeout(saveTimer);
+  saveQueued=false;
+  const abandoned=saveWaiters;saveWaiters=[];
+  finishSaveWaiters(abandoned,false);
+  applyState(body.data,body.version);
+  markLocalClean();
+  setSync(opts.syncText||'همگام با سرور');
+  if(opts.render!==false)render();
+  if(opts.toast)toast(opts.toast);
+  return true;
+}
 async function flushSave(){
-  if(saveBusy||!saveQueued)return;
-  if(!can('write')&&!can('admin')&&!can('acct')){saveQueued=false;setSync('فقط مشاهده');return}
+  if(saveBusy){saveQueued=true;return}
+  if(!saveQueued){
+    const idle=saveWaiters;saveWaiters=[];
+    finishSaveWaiters(idle,true);
+    return;
+  }
+  if(!canPersist()){
+    saveQueued=false;markLocalClean();setSync('فقط مشاهده');
+    const denied=saveWaiters;saveWaiters=[];
+    finishSaveWaiters(denied,false);
+    return;
+  }
+  const batch=saveWaiters;saveWaiters=[];
   saveQueued=false;
   saveBusy=true;
   let delayRetry=false;
+  let ok=false;
   try{
     const version=S._v||0;
-    const res=await fetch('/api/state',{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({version,data:snapshot()})});
+    const payload=snapshot();
+    const res=await fetch('/api/state',{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({version,data:payload})});
     const body=await res.json().catch(()=>({}));
-    if(res.status===401){showLogin();return}
-    if(!res.ok){setSync(res.status===409?'تعارض نسخه':'ذخیره نشد');toast(body.message||'ذخیره نشد');return}
+    if(res.status===401){showLogin();finishSaveWaiters(batch,false);return}
+    if(res.status===409){
+      syncConflict=true;
+      setSync('تعارض نسخه');
+      try{
+        await reloadStateFromServer({
+          toast:body.message||'شخص دیگری داده را تغییر داده بود؛ صفحه با نسخه سرور همگام شد. تغییرات ذخیره‌نشده لغو شد.',
+          syncText:'همگام با سرور'
+        });
+      }catch(e){
+        toast('تعارض نسخه — صفحه را تازه کنید');
+      }
+      finishSaveWaiters(batch,false);
+      return;
+    }
+    if(!res.ok){
+      localDirty=true;
+      setSync('ذخیره نشد');
+      toast(body.message||'ذخیره نشد');
+      finishSaveWaiters(batch,false);
+      // اگر در حین درخواست ذخیرهٔ جدیدی صف شده، ادامه بده
+      if(saveQueued||saveWaiters.length){saveQueued=true}
+      return;
+    }
     S._v=body.version;
     if(body.pn)S.pn=Math.max(S.pn||0,body.pn);
     if(body.cn)S.cn=Math.max(S.cn||0,body.cn);
     if(body.rn)S.rn=Math.max(S.rn||0,body.rn);
-    setSync('ذخیره شد');
+    if(!saveQueued&&!saveWaiters.length)markLocalClean();
+    else{saveQueued=true;localDirty=true}
+    setSync('ذخیره شد · نسخه '+F(S._v));
+    try{localStorage.removeItem('armanCRM')}catch(e){}
+    ok=true;
   }catch(e){
     saveQueued=true;
+    localDirty=true;
     delayRetry=true;
-    setSync('قطع ارتباط');
+    setSync('قطع ارتباط — تلاش مجدد');
     toast('ارتباط با سرور قطع شد. ذخیره دوباره تلاش می‌شود.');
+    saveWaiters=batch.concat(saveWaiters);
     setTimeout(()=>{if(!saveBusy)flushSave()},4000);
   }finally{
     saveBusy=false;
   }
-  if(saveQueued&&!delayRetry)flushSave();
+  if(ok)finishSaveWaiters(batch,true);
+  if((saveQueued||saveWaiters.length)&&!delayRetry){
+    saveQueued=true;
+    flushSave();
+  }
 }
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushSave()});
-window.addEventListener('beforeunload',()=>{
-  if(!saveQueued&&!saveBusy)return;
-  try{fetch('/api/state',{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:S._v||0,data:snapshot()}),keepalive:true})}catch(e){}
+async function checkServerVersion(){
+  if(!canPersist()||saveBusy||saveQueued||localDirty||syncConflict||document.hidden)return;
+  try{
+    const res=await fetch('/api/state',{credentials:'same-origin'});
+    if(!res.ok)return;
+    const body=await res.json().catch(()=>({}));
+    if(typeof body.version==='number'&&body.version!==(S._v||0)){
+      await reloadStateFromServer({toast:'داده از سرور به‌روز شد',syncText:'به‌روز شد'});
+    }
+  }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden'){
+    if(saveQueued&&!saveBusy)flushSave();
+  }else{
+    checkServerVersion();
+  }
 });
+window.addEventListener('focus',()=>checkServerVersion());
+window.addEventListener('beforeunload',(e)=>{
+  if(!(localDirty||saveQueued||saveBusy))return;
+  // فقط اگر هنوز PUT در پرواز نیست، یک keepalive بفرست — از ارسال موازی با flush جلوگیری می‌شود
+  if(saveQueued&&!saveBusy){
+    try{
+      fetch('/api/state',{
+        method:'PUT',
+        credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({version:S._v||0,data:snapshot()}),
+        keepalive:true
+      });
+      saveQueued=false;
+    }catch(err){}
+  }
+  e.preventDefault();
+  e.returnValue='تغییرات در حال ذخیره‌اند؛ کمی صبر کنید.';
+});
+if(!versionWatchTimer)versionWatchTimer=setInterval(()=>checkServerVersion(),60000);
 function showLogin(msg){
   $('#boot').hidden=true;$('#shell').hidden=true;$('#login').hidden=false;
   const err=$('#loginErr');
@@ -169,8 +312,169 @@ function showShell(){$('#boot').hidden=true;$('#login').hidden=true;$('#shell').
 const proj=id=>S.projects.find(p=>p.id==id),cust=id=>S.customers.find(c=>c.id==id)||{name:'—'};
 const unitOf=(pid,id)=>(proj(pid)||{units:[]}).units.find(u=>u.id==id)||{no:'—',area:0};
 const setSt=(pid,id,v)=>{const u=unitOf(pid,id);if(u.id)u.st=v};
-const paidSum=c=>sum((c.inst||[]).filter(i=>i.paid),i=>i.amt);
-const lateSum=c=>sum((c.inst||[]).filter(i=>i.paid),i=>Number(i.lateFee)||0);
+function instPays(i){
+  if(Array.isArray(i?.pays)&&i.pays.length)return i.pays;
+  if(i?.paid)return[{id:'legacy',amt:num(i.amt),date:i.pdate||i.date||'',ref:i.ref||'',note:''}];
+  return[];
+}
+const instReceived=i=>Math.round(sum(instPays(i),p=>num(p.amt)));
+const instRemain=i=>Math.max(0,num(i?.amt)-instReceived(i));
+const isInstPaid=i=>instRemain(i)<=0;
+const isInstPartial=i=>!isInstPaid(i)&&instReceived(i)>0;
+function syncInstPaid(i){
+  if(!i)return;
+  if(!Array.isArray(i.pays))i.pays=[];
+  const rec=Math.round(sum(i.pays,p=>num(p.amt)));
+  if(i.pays.length){
+    i.paid=rec+1e-9>=num(i.amt);
+    const last=i.pays[i.pays.length-1];
+    i.pdate=last.date||i.pdate||'';
+    i.ref=i.pays.map(p=>p.ref).filter(Boolean).join('، ');
+  }else if(!i.paid){i.pdate='';i.ref=''}
+}
+const paidSum=c=>sum(c.inst||[],i=>Math.min(num(i.amt),instReceived(i)));
+const lateSum=c=>sum((c.inst||[]).filter(i=>isInstPaid(i)),i=>Number(i.lateFee)||0);
+const instStats=c=>{
+  const list=c.inst||[];
+  return{
+    total:list.length,
+    paid:list.filter(isInstPaid).length,
+    partial:list.filter(isInstPartial).length,
+    unpaid:list.filter(i=>!isInstPaid(i)&&!isInstPartial(i)).length
+  };
+};
+const custInstStats=cs=>{
+  const acc={total:0,paid:0,partial:0,unpaid:0};
+  (cs||[]).forEach(c=>{const s=instStats(c);acc.total+=s.total;acc.paid+=s.paid;acc.partial+=s.partial;acc.unpaid+=s.unpaid});
+  return acc;
+};
+const overpayText=(amt,fromTitle)=>{
+  const title=String(fromTitle||'قسط').trim()||'قسط';
+  return `${money(amt)} تومان از بابت «${title}» که اضافه‌پرداخت شده بود، از این قسط کسر گردید`;
+};
+const parseLegacyOverFrom=note=>{
+  const n=String(note||'');
+  if(!n.startsWith('overpay:'))return '';
+  return n.slice(8).split(/[|\n]/)[0]||'';
+};
+const payOverFrom=p=>String(p?.overFrom||parseLegacyOverFrom(p?.note)||'');
+const isOverpayPay=(p,fromId)=>{
+  const oid=payOverFrom(p);
+  if(!oid)return false;
+  if(!fromId)return true;
+  return oid===fromId;
+};
+const payNoteLabel=(p,c)=>{
+  const n=String(p?.note||'');
+  if(n&&!n.startsWith('overpay:'))return n;
+  if(n.startsWith('overpay:')){
+    const pipe=n.indexOf('|');
+    if(pipe>0){const t=n.slice(pipe+1).trim();if(t)return t}
+    const nl=n.indexOf('\n');
+    if(nl>0){const t=n.slice(nl+1).trim();if(t)return t}
+  }
+  const fromId=payOverFrom(p);
+  if(!fromId)return n;
+  let title='قسط';
+  if(c){const src=(c.inst||[]).find(i=>i.id===fromId);if(src)title=src.title||title}
+  return overpayText(p.amt,title);
+};
+const payLineHtml=(p,c)=>{
+  const over=!!payOverFrom(p);
+  const nl=payNoteLabel(p,c);
+  if(over)return `${money(p.amt)}${nl?` · ${esc(nl)}`:''}`;
+  return `${money(p.amt)}${p.ref?` · ${F(p.ref)}`:''}${p.date?` · ${F(p.date)}`:''}`;
+};
+function stripOverpayCredits(c,fromInstId){
+  (c.inst||[]).forEach(x=>{
+    if(!Array.isArray(x.pays)||!x.pays.length)return;
+    const before=x.pays.length;
+    x.pays=x.pays.filter(p=>!isOverpayPay(p,fromInstId));
+    if(x.pays.length!==before)syncInstPaid(x);
+  });
+}
+function normalizeInstPays(c){
+  (c?.inst||[]).forEach(i=>{
+    if(!Array.isArray(i.pays))return;
+    i.pays=i.pays.map(p=>{
+      const fromId=payOverFrom(p);
+      if(!fromId)return{...p,overFrom:p.overFrom||'',note:String(p.note||'').startsWith('overpay:')?'':(p.note||'')};
+      const src=(c.inst||[]).find(x=>x.id===fromId);
+      const nice=payNoteLabel(p,c)||overpayText(p.amt,src?.title||'قسط');
+      return{...p,overFrom:fromId,note:nice};
+    });
+  });
+}
+function previewInstOverpay(c,currentInst,excess){
+  const totalExcess=Math.max(0,Math.round(num(excess)));
+  if(!(totalExcess>0))return{excess:0,applied:0,left:0,cuts:[],count:0,each:0};
+  const others=(c.inst||[]).filter(x=>x!==currentInst&&x.id!==currentInst?.id)
+    .slice().sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  const targets=[];
+  for(const x of others){
+    const ownPays=(Array.isArray(x.pays)?x.pays:[]).filter(p=>!isOverpayPay(p,currentInst.id));
+    const got=Math.round(sum(ownPays,p=>num(p.amt)));
+    const need=Math.max(0,num(x.amt)-got);
+    if(need>0)targets.push({id:x.id,title:x.title||'قسط',need,cut:0});
+  }
+  if(!targets.length)return{excess:totalExcess,applied:0,left:totalExcess,cuts:[],count:0,each:0};
+  // تقسیم مساوی مازاد بین همه اقساط باقی‌مانده؛ ماندهٔ خرد به اقساط اول می‌رود
+  let pool=totalExcess;
+  let open=targets.slice();
+  while(pool>0&&open.length){
+    const base=Math.floor(pool/open.length);
+    const rem=pool-base*open.length;
+    let used=0;
+    open.forEach((t,i)=>{
+      const share=base+(i<rem?1:0);
+      const take=Math.min(share,t.need-t.cut);
+      t.cut+=take;
+      used+=take;
+    });
+    if(!(used>0))break;
+    pool-=used;
+    open=targets.filter(t=>t.need>t.cut);
+  }
+  const cuts=targets.filter(t=>t.cut>0).map(t=>({id:t.id,title:t.title,cut:t.cut,remain:t.need-t.cut}));
+  const applied=Math.round(sum(cuts,t=>t.cut));
+  return{
+    excess:totalExcess,
+    applied,
+    left:Math.max(0,totalExcess-applied),
+    cuts,
+    count:targets.length,
+    each:targets.length?Math.floor(totalExcess/targets.length):0
+  };
+}
+function applyInstOverpay(c,currentInst,excess,meta){
+  stripOverpayCredits(c,currentInst.id);
+  const prev=previewInstOverpay(c,currentInst,excess);
+  const date=meta?.date||todayJ();
+  prev.cuts.forEach(cut=>{
+    const x=(c.inst||[]).find(i=>i.id===cut.id);if(!x)return;
+    if(!Array.isArray(x.pays))x.pays=[];
+    // بدون ref تا با uniqueness شماره پیگیری قسط مبدأ تداخل نکند
+    x.pays.push({
+      id:uid(),
+      amt:cut.cut,
+      date,
+      ref:'',
+      overFrom:currentInst.id,
+      note:overpayText(cut.cut,currentInst.title||'قسط')
+    });
+    syncInstPaid(x);
+    if(isInstPaid(x))clearLateFields(x);
+  });
+  return prev;
+}
+function instPayStatusLabel(i){
+  if(isInstPaid(i))return 'پرداخت شد';
+  if(isInstPartial(i))return 'مانده '+money(instRemain(i));
+  const d=diff(i.date);
+  if(d<0)return F(-d)+' روز تأخیر';
+  if(d===0)return 'سررسید امروز';
+  return F(d)+' روز مانده';
+}
 const unitTxt=(pid,id)=>`${(proj(pid)||{}).name||'—'} – واحد ${unitOf(pid,id).no}`;
 const daysBetween=(a,b)=>{if(!a||!b||!normJ(a)||!normJ(b))return 0;return Math.round((toDate(normJ(b))-toDate(normJ(a)))/864e5)};
 const instLatePct=(c,i)=>{if(i&&i.latePctDaily!=null&&i.latePctDaily!=='')return Number(i.latePctDaily)||0;return Number(c&&c.latePctDaily)||0};
@@ -388,21 +692,33 @@ function form(title,fields,init,ok){const m=$('#modal');init=init||{};
  $('#ok').onclick=async()=>{const v={};for(const f of fields){
   if(f.t==='html'||f.skip||!f.k)continue;
   const e=el(f.k);if(!e)continue;
+  const hidden=!!e.closest('label')?.hidden;
   if(f.t==='check'){v[f.k]=!!e.checked;continue}
   const x=e.value.trim();v[f.k]=f.t=='money'?num(x):x;
+  if(hidden)continue;
   if(f.r&&!v[f.k]&&v[f.k]!==0){toast('«'+f.l+'» را وارد کنید');return}
   if(f.j&&v[f.k]){v[f.k]=normJ(x);if(!v[f.k]){toast('تاریخ «'+f.l+'» معتبر نیست (مثال: ۱۴۰۵/۰۸/۱۰)');return}}
  }
   const btn=$('#ok');btn.disabled=true;try{const result=await ok(v);if(result!==false)closeM()}finally{if($('#ok'))$('#ok').disabled=false}}}
-const closeM=()=>{$('#modal').classList.remove('on');$('#modal').innerHTML=''};
+const closeM=()=>{$('#modal').classList.remove('on');$('#modal').innerHTML='';if(!UNIT_EDIT)UNIT_OWNERS_DRAFT=null};
 function askConfirm({title,body,okLabel='تأیید و ذخیره',cancelLabel='انصراف',danger=false},onOk){
   const m=$('#modal');
   m.innerHTML=`<div class="box confirm-box"><h3 style="margin-top:0">${esc(title||'تأیید')}</h3><div class=confirm-body>${body||''}</div><div class=act><button type=button class="${danger?'x':'pri'}" id=ok>${esc(okLabel)}</button><button type=button id=cancel>${esc(cancelLabel)}</button></div></div>`;
   m.classList.add('on');
   $('#cancel').onclick=()=>closeM();
   $('#ok').onclick=async()=>{
-    const btn=$('#ok');btn.disabled=true;
-    try{const r=await onOk();if(r!==false)closeM()}finally{if($('#ok'))$('#ok').disabled=false}
+    const btn=$('#ok');
+    if(btn)btn.disabled=true;
+    let keepOpen=false;
+    try{
+      const r=await onOk();
+      keepOpen=r===false;
+    }catch(err){
+      keepOpen=true;
+      toast('خطا در انجام عملیات');
+    }
+    if(!keepOpen)closeM();
+    else if(btn&&m.contains(btn))btn.disabled=false;
   };
 }
 const MN=['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
@@ -439,7 +755,18 @@ const grq=(t,f)=>{const r=dueList().filter(f);if(!r.length)return '';
  }).join('')}</div></section>`};
 const fmtIn=e=>{const v=Math.round(num(e.value));e.value=v?F(v.toLocaleString('en')).replace(/,/g,'٬'):''};
 const setAuto=(id,v)=>{const c=S.contracts.find(x=>x.id==id);if(!c)return;c.auto=v;save();toast(v?'محاسبه خودکار روشن شد':'محاسبه خودکار خاموش شد')};
-function redist(c,ch){const o=c.inst.filter(x=>!x.paid&&x!==ch);if(!o.length)return;let rest=c.total-sum(c.inst.filter(x=>x.paid),x=>x.amt)-ch.amt;if(rest<0){toast('مبلغ قسط از مانده قرارداد بیشتر است');rest=0}const w=sum(o,x=>x.amt);let left=rest;o.forEach((x,k)=>{x.amt=k==o.length-1?left:Math.floor(rest*(w?x.amt/w:1/o.length)/1000)*1000;left-=x.amt})}
+function redist(c,ch){
+  const o=(c.inst||[]).filter(x=>x!==ch&&!isInstPaid(x)&&!isInstPartial(x));
+  if(!o.length)return;
+  let rest=Math.max(0,num(c.total)-paidSum(c)-num(ch.amt));
+  if(rest<0){toast('مبلغ قسط از مانده قرارداد بیشتر است');rest=0}
+  const w=sum(o,x=>x.amt)||o.length;
+  let left=rest;
+  o.forEach((x,k)=>{
+    x.amt=k===o.length-1?left:Math.floor(rest*(num(x.amt)/w)/1000)*1000;
+    left-=x.amt;
+  });
+}
 const openDoc=(id,k)=>{V={n:'doc',id,k};remember();render();scrollTo(0,0)};
 const docObj=()=>V.k=='res'?S.reservations.find(x=>x.id==V.id):S.contracts.find(x=>x.id==V.id);
 function saveDoc(){const o=docObj();if(!o||!$('.paper'))return toast('سند پیدا نشد');o.ed=o.ed||{};o.ed[edKey()]=$('.paper').innerHTML;save();toast('متن ویرایش‌شده ذخیره شد')}
@@ -481,14 +808,108 @@ async function dlDoc(){
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=title+'.doc';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   toast('فایل Word آماده شد');
 }
-function editC(id){const c=S.contracts.find(x=>x.id==id);form('ویرایش قرارداد',[{k:'type',l:'نوع قرارداد',t:'select',o:Object.entries(TYPES).map(([k,v])=>[k,v.name])},{k:'cust',l:'خریدار',t:'select',o:S.customers.map(x=>[x.id,x.name+' – '+x.nid])},{k:'date',l:'تاریخ قرارداد',j:1,r:1},{k:'total',l:'مبلغ کل (تومان)',t:'money',r:1},{k:'dur',l:'مدت (ماه)'},{k:'latePctDaily',l:'جریمه دیرکرد روزانه (٪ از مبلغ قسط)',d:String(c.latePctDaily||0)},{k:'note',l:'توضیحات',t:'area',w:1}],{...c,latePctDaily:c.latePctDaily||0},v=>{askConfirm({title:'تأیید ذخیره قرارداد',body:`<p>تغییرات قرارداد <b>${esc(c.no)}</b> ذخیره شود؟</p>`},()=>{Object.assign(c,{type:v.type,cust:v.cust,date:v.date,total:v.total,dur:v.dur,note:v.note,latePctDaily:num(v.latePctDaily)});delete c.ed;save();render();toast('قرارداد ذخیره شد');return true});return false})}
-function regen(id){const c=S.contracts.find(x=>x.id==id),rest=c.total-paidSum(c);form('بازسازی اقساط پرداخت‌نشده',[{k:'rest',l:'مبلغ باقی‌مانده برای تقسیم (تومان)',t:'money',r:1},{k:'count',l:'تعداد اقساط',d:'12'},{k:'first',l:'تاریخ اولین قسط',j:1,r:1,d:addM(todayJ(),1)},{k:'step',l:'فاصله اقساط (ماه)',d:'1'},{k:'day',l:'روز ثابت هر ماه (اختیاری، مثلاً ۲۵)'}],{rest},v=>{const n=parseInt(N(v.count))||0,step=Math.max(1,parseInt(N(v.step))||1),day=parseInt(N(v.day))||0,each=n?Math.floor(v.rest/n/1000)*1000:0;if(!n){toast('تعداد اقساط را وارد کنید');return false}
- c.inst=c.inst.filter(i=>i.paid);for(let i=0;i<n;i++){let d=addM(v.first,i*step);if(day){const[y,m]=pj(d);d=fj(y,m,Math.min(day,mlen(y,m)))}c.inst.push({id:uid(),title:'قسط '+F(i+1),amt:i==n-1?v.rest-each*(n-1):each,date:d,paid:false,pdate:'',ref:'',lateDays:0,lateCalc:0,lateFee:0,lateNote:''})}c.inst.sort((a,b)=>a.date<b.date?-1:1);save();render()})}
-function setDay(id){const c=S.contracts.find(x=>x.id==id);form('روز ثابت ماه برای اقساط پرداخت‌نشده',[{k:'day',l:'روز ماه (۱ تا ۳۱)',r:1,d:'25'}],0,v=>{const d=parseInt(N(v.day));if(!(d>=1&&d<=31)){toast('روز معتبر نیست');return false}c.inst.forEach(i=>{if(!i.paid){const[y,m]=pj(i.date);i.date=fj(y,m,Math.min(d,mlen(y,m)))}});c.inst.sort((a,b)=>a.date<b.date?-1:1);save();render()})}
+function monthGap(a,b){const[ay,am]=pj(a),[by,bm]=pj(b);return(by-ay)*12+(bm-am)}
+function modeNum(arr,fallback){
+  if(!arr||!arr.length)return fallback;
+  const freq={};arr.forEach(n=>{freq[n]=(freq[n]||0)+1});
+  return +Object.entries(freq).sort((a,b)=>b[1]-a[1]||(+a[0])-(+b[0]))[0][0]||fallback;
+}
+/** پارامترهای اقساط را از اقساط پرداخت‌نشده فعلی قرارداد می‌خواند تا فرم ویرایش/بازسازی از صفر شروع نشود. */
+function instPlanFrom(c){
+  const unpaid=(c.inst||[]).filter(i=>!isInstPaid(i)&&!isInstPartial(i)).slice().sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  const rest=Math.max(0,(Number(c.total)||0)-paidSum(c));
+  if(!unpaid.length)return{rest,count:12,first:addM(todayJ(),1),step:1,day:''};
+  const gaps=[];
+  for(let i=1;i<unpaid.length;i++){const g=monthGap(unpaid[i-1].date,unpaid[i].date);if(g>0)gaps.push(g)}
+  const days=unpaid.map(i=>pj(i.date)[2]).filter(d=>d>=1&&d<=31);
+  return{rest,count:unpaid.length,first:unpaid[0].date,step:modeNum(gaps,1),day:days.length?String(modeNum(days,'')):''};
+}
+function editC(id){
+  const c=S.contracts.find(x=>x.id==id);if(!c)return;
+  const unitKey=(c.proj||'')+'|'+(c.unit||'');
+  const base=c.baseTotal!=null&&c.baseTotal!==''?num(c.baseTotal):num(c.total);
+  const init={
+    type:c.type,cust:c.cust,unit:unitKey,date:c.date,
+    base,extraOn:!!c.extraOn,profitOn:!!c.profitOn,total:num(c.total),
+    dur:c.dur||'',latePctDaily:c.latePctDaily||0,note:c.note||'',
+    _boxClass:'box-wide'
+  };
+  form('ویرایش قرارداد',[
+    {k:'type',l:'نوع قرارداد',t:'select',o:Object.entries(TYPES).map(([k,v])=>[k,v.name])},
+    {k:'cust',l:'خریدار',t:'select',o:S.customers.map(x=>[x.id,x.name+' – '+x.nid])},
+    {k:'unit',l:'واحد',t:'select',o:unitOpts(unitKey),on:(m,f)=>{if(f){syncContractPrice(m);return}const[a,b]=m.querySelector('[name=unit]').value.split('|');setM(m,'base',unitSaleTotal(unitOf(a,b)));syncContractPrice(m)}},
+    {k:'date',l:'تاریخ قرارداد',j:1,r:1},
+    {k:'base',l:'قیمت پایه واحد (تومان)',t:'money',r:1,on:(m)=>syncContractPrice(m)},
+    {t:'html',html:contractPricePanelHtml()},
+    {k:'extraOn',t:'check',skipRender:1,on:(m)=>syncContractPrice(m)},
+    {k:'profitOn',t:'check',skipRender:1,on:(m)=>syncContractPrice(m)},
+    {k:'total',t:'money',skipRender:1,r:1,l:'مبلغ نهایی قرارداد'},
+    {k:'dur',l:'مدت قرارداد / تحویل (ماه)'},
+    {k:'latePctDaily',l:'جریمه دیرکرد روزانه (٪ از مبلغ قسط)'},
+    {k:'note',l:'توضیحات',t:'area',w:1},
+    {t:'html',html:`<p class=fd style="margin:0">اقساط فعلی دست‌نخورده می‌مانند. برای تغییر جدول اقساط از «بازسازی اقساط» استفاده کنید — همان پارامترهای ذخیره‌شده از قبل پر می‌شوند.</p>`}
+  ],init,v=>{
+    const price=calcInstPrice(v.base,v.extraOn,v.profitOn);
+    v.total=price.total;
+    if(!(v.total>0)){toast('مبلغ نهایی قرارداد معتبر نیست');return false}
+    const[pid,unit]=String(v.unit||'').split('|');
+    if(!pid||!unit){toast('واحد را انتخاب کنید');return false}
+    askConfirm({title:'تأیید ذخیره قرارداد',body:`<p>تغییرات قرارداد <b>${esc(c.no)}</b> ذخیره شود؟</p>${contractPriceSummaryHtml(price)}<p class=fd>جدول اقساط تغییر نمی‌کند مگر جداگانه بازسازی کنید.</p>`},()=>{
+      const typeChanged=v.type!==c.type;
+      if((c.proj||'')!==pid||(c.unit||'')!==unit){
+        setSt(c.proj,c.unit,'free');
+        setSt(pid,unit,'sold');
+      }
+      Object.assign(c,{
+        type:v.type,cust:v.cust,proj:pid,unit,date:v.date,
+        total:price.total,baseTotal:price.base,
+        extraOn:price.extraOn,extraPct:price.extraPct,extraAmt:price.extraAmt,
+        profitOn:price.profitOn,profitPct:price.profitPct,profitAmt:price.profitAmt,
+        dur:v.dur,note:v.note,latePctDaily:num(v.latePctDaily)
+      });
+      if(typeChanged)delete c.ed;
+      save();render();toast('قرارداد ذخیره شد');return true;
+    });
+    return false;
+  });
+}
+function regen(id){
+  const c=S.contracts.find(x=>x.id==id);if(!c)return;
+  const plan=instPlanFrom(c);
+  form('بازسازی اقساط پرداخت‌نشده',[
+    {k:'rest',l:'مبلغ باقی‌مانده برای تقسیم (تومان)',t:'money',r:1},
+    {k:'count',l:'تعداد اقساط'},
+    {k:'first',l:'تاریخ اولین قسط',j:1,r:1},
+    {k:'step',l:'فاصله اقساط (ماه)'},
+    {k:'day',l:'روز ثابت هر ماه (اختیاری، مثلاً ۲۵)'}
+  ],plan,v=>{
+    const n=parseInt(N(v.count))||0,step=Math.max(1,parseInt(N(v.step))||1),day=parseInt(N(v.day))||0,each=n?Math.floor(v.rest/n/1000)*1000:0;
+    if(!n){toast('تعداد اقساط را وارد کنید');return false}
+    askConfirm({title:'تأیید بازسازی اقساط',body:`<p>${F(n)} قسط پرداخت‌نشده جایگزین شود؟ اقساط پرداخت‌شده حفظ می‌شوند.</p><p class=fd>مانده ${money(v.rest)} تومان · فاصله ${F(step)} ماه${day?` · روز ${F(day)}`:''}</p>`},()=>{
+      c.inst=(c.inst||[]).filter(i=>isInstPaid(i)||isInstPartial(i)||(Array.isArray(i.pays)&&i.pays.length));
+      for(let i=0;i<n;i++){
+        let d=addM(v.first,i*step);
+        if(day){const[y,m]=pj(d);d=fj(y,m,Math.min(day,mlen(y,m)))}
+        c.inst.push({id:uid(),title:'قسط '+F(i+1),amt:i==n-1?v.rest-each*(n-1):each,date:d,paid:false,pdate:'',ref:'',lateDays:0,lateCalc:0,lateFee:0,lateNote:''});
+      }
+      c.inst.sort((a,b)=>a.date<b.date?-1:1);save();render();toast('اقساط بازسازی شد');return true;
+    });
+    return false;
+  });
+}
+function setDay(id){
+  const c=S.contracts.find(x=>x.id==id);if(!c)return;
+  const plan=instPlanFrom(c);
+  form('روز ثابت ماه برای اقساط پرداخت‌نشده',[{k:'day',l:'روز ماه (۱ تا ۳۱)',r:1}],{day:plan.day||'25'},v=>{
+    const d=parseInt(N(v.day));if(!(d>=1&&d<=31)){toast('روز معتبر نیست');return false}
+    c.inst.forEach(i=>{if(!isInstPaid(i)){const[y,m]=pj(i.date);i.date=fj(y,m,Math.min(d,mlen(y,m)))}});
+    c.inst.sort((a,b)=>a.date<b.date?-1:1);save();render();
+  });
+}
 const setM=(m,k,v)=>{const e=m.querySelector(`[name=${k}]`);e.value=v?F((+v).toLocaleString('en')).replace(/,/g,'٬'):''};
 // داشبورد
 function dueList(){const L=[],legalDays=Math.max(1,Number(S.cfg?.legalDays)||7);
- S.contracts.forEach(c=>(c.inst||[]).forEach(i=>{if(!i.paid){const d=diff(i.date);if(d<=7||d<=-legalDays)L.push({d,k:'قسط',who:cust(c.cust).name,ph:cust(c.cust).phone,pid:i.id,cid:c.id,legal:d<=-legalDays,desc:`${c.no} – ${i.title}`,amt:i.amt,date:i.date,go:`go('cd','${c.id}')`})}}));
+ S.contracts.forEach(c=>(c.inst||[]).forEach(i=>{if(!isInstPaid(i)){const d=diff(i.date);if(d<=7||d<=-legalDays)L.push({d,k:'قسط',who:cust(c.cust).name,ph:cust(c.cust).phone,pid:i.id,cid:c.id,legal:d<=-legalDays,desc:`${c.no} – ${i.title}`,amt:instRemain(i),date:i.date,go:`go('cd','${c.id}')`})}}));
  S.reservations.forEach(r=>{if(r.st=='cancelling'){L.push({d:diff(r.cancel.date),k:'لغو رزرو',who:cust(r.cust).name,ph:cust(r.cust).phone,desc:`${r.no} – مرحله بعد: ${CS[r.cancel.h.length]}`,amt:r.cancel.refund,date:r.cancel.date,go:`go('rd','${r.id}')`})}if(r.st=='active'){const d=diff(r.deadline),rem=r.need-sum(r.pays,p=>p.amt);if(d<=7||rem<=0||d<=-legalDays)L.push({d,k:rem>0?'مهلت رزرو':'تکمیل وجه؛ تعیین تکلیف',who:cust(r.cust).name,ph:cust(r.cust).phone,legal:d<=-legalDays&&rem>0,desc:`${r.no} – ${unitTxt(r.proj,r.unit)}`,amt:rem,date:r.deadline,go:`go('rd','${r.id}')`})}});
  S.leads.forEach(l=>{if(l.next&&l.stage<8){const d=diff(l.next);if(d<=7)L.push({d,k:'پیگیری سرنخ',who:l.name,ph:l.phone,desc:LS[l.stage],amt:0,date:l.next,go:`go('lead')`})}});
  return L.sort((a,b)=>a.d-b.d)}
@@ -531,7 +952,10 @@ const unitSelOpts=(list,cur)=>{
   if(v&&!opts.some(([k])=>String(k)===v))opts.push([v,F(v)]);
   return opts.map(([k,l])=>`<option value="${esc(k)}" ${String(k)===v?'selected':''}>${esc(l)}</option>`).join('');
 };
-const unitSearchBlob=u=>N([u.no,u.floor,u.kind,u.block,u.face,u.rooms,UST[u.st],u.handReady?'آماده':'',u.handDate||''].join(' '));
+const unitSearchBlob=u=>{
+  const ownerNames=(u.owners||[]).map(o=>(cust(o.custId).name||'')+' '+(cust(o.custId).phone||'')).join(' ');
+  return N([u.no,u.floor,u.kind,u.block,u.face,u.rooms,UST[u.st],u.handReady?'آماده':'',u.handDate||'',u.dangSplit?'دانگ تقسیط':'',ownerNames].join(' '));
+};
 const unitHandLabel=u=>u.handReady?(`آماده تحویل${u.handDate?' · '+F(u.handDate):''}`):(u.handDate?F(u.handDate):'—');
 const unitParkLabel=u=>u.parking||u.parkingCount?`${F(u.parkingCount||1)} ماشین`:'ندارد';
 const unitStoreLabel=u=>{
@@ -540,6 +964,163 @@ const unitStoreLabel=u=>{
   if(u.storageArea)parts.push(`${F(u.storageArea)} م²`);
   return parts.join(' · ');
 };
+const dangSum=owners=>Math.round(sum(owners||[],o=>Number(o.dang)||0)*1000)/1000;
+const dangRemain=owners=>Math.round((DANG_MAX-dangSum(owners))*1000)/1000;
+const cloneOwners=list=>(Array.isArray(list)?list:[]).map(o=>({id:o.id||uid(),custId:o.custId,dang:num(o.dang),note:o.note||''}));
+function draftOwnersFrom(u){
+  return{dangSplit:!!(u&&u.dangSplit),owners:cloneOwners(u&&u.owners)};
+}
+function readOwnersDraft(){
+  const d=UNIT_OWNERS_DRAFT||{dangSplit:false,owners:[]};
+  if(!d.dangSplit)return{dangSplit:false,owners:[]};
+  const owners=cloneOwners(d.owners).filter(o=>o.custId&&Number(o.dang)>0);
+  return{dangSplit:true,owners};
+}
+function validateOwnersDraft(draft){
+  draft=draft||readOwnersDraft();
+  if(!draft.dangSplit)return{ok:true,dangSplit:false,owners:[]};
+  const seen=new Set();
+  for(const o of draft.owners){
+    if(!o.custId){toast('برای هر سهم، مشتری را انتخاب کنید');return{ok:false}}
+    if(!cust(o.custId)?.id){toast('یکی از مالکان در لیست مشتریان نیست');return{ok:false}}
+    if(!(Number(o.dang)>0)||Number(o.dang)>DANG_MAX){toast(`تعداد دانگ هر مالک باید بیشتر از ۰ و حداکثر ${F(DANG_MAX)} باشد`);return{ok:false}}
+    if(seen.has(o.custId)){toast('یک مشتری را نمی‌توان دو بار به‌عنوان مالک ثبت کرد');return{ok:false}}
+    seen.add(o.custId);
+  }
+  if(dangSum(draft.owners)>DANG_MAX+1e-9){toast(`جمع دانگ‌ها نمی‌تواند بیش از ${F(DANG_MAX)} باشد`);return{ok:false}}
+  return{ok:true,dangSplit:true,owners:cloneOwners(draft.owners)};
+}
+function custSelectOpts(selected){
+  return `<option value="">— انتخاب مشتری —</option>`+(S.customers||[]).map(c=>`<option value="${esc(c.id)}" ${c.id===selected?'selected':''}>${esc(c.name)} – ${F(c.phone||'')}</option>`).join('');
+}
+function dangSummaryHtml(owners){
+  const used=dangSum(owners),rem=dangRemain(owners);
+  return `<div class=dang-sum>تخصیص‌شده <b>${F(used)}</b> از ${F(DANG_MAX)} دانگ · مانده <b>${F(rem)}</b> دانگ آزاد/شرکت</div>`;
+}
+function unitOwnersViewHtml(u){
+  if(!u.dangSplit)return '';
+  const owners=u.owners||[];
+  const rem=dangRemain(owners);
+  const rows=owners.length?owners.map(o=>{
+    const c=cust(o.custId);
+    return `<li><b>${esc(c.name||'—')}</b> · ${F(o.dang)} دانگ${o.note?` <span class=fd>(${esc(o.note)})</span>`:''}</li>`;
+  }).join(''):'<li class=fd>هنوز مالکی ثبت نشده</li>';
+  return `<div class="dang-view span2">
+    <div class=dang-view-h><span class="badge warn">تقسیط دانگی</span>${dangSummaryHtml(owners)}</div>
+    <ul class=dang-list>${rows}${rem>0?`<li class=fd>${F(rem)} دانگ آزاد / شرکت</li>`:''}</ul>
+  </div>`;
+}
+function unitOwnersPanelHtml(){
+  const d=UNIT_OWNERS_DRAFT||{dangSplit:false,owners:[]};
+  if(!d.dangSplit)return `<div class=dang-box id=dangBox hidden><p class=fd>با فعال کردن تقسیط دانگی می‌توانید مالک‌های جدا برای سهم‌های این واحد تعریف کنید.</p></div>`;
+  const rows=(d.owners||[]).map((o,i)=>`<div class=dang-row data-i="${i}">
+    <label class=dang-cust>مالک<select onchange="setOwnerDraftField(${i},'custId',this.value)">${custSelectOpts(o.custId||'')}</select></label>
+    <label>دانگ<input inputmode=decimal value="${o.dang?esc(F(String(o.dang))):''}" oninput="setOwnerDraftField(${i},'dang',this.value)" placeholder="مثلاً ۲"></label>
+    <label>توضیح<input value="${esc(o.note||'')}" oninput="setOwnerDraftField(${i},'note',this.value)" placeholder="اختیاری"></label>
+    <button type=button class="sm x" onclick="removeOwnerDraft(${i})">حذف</button>
+  </div>`).join('')||`<p class=fd>مالکی اضافه نشده. از دکمه‌های زیر استفاده کنید.</p>`;
+  const q=d.quick||null;
+  const quick=q?`<div class=dang-quick>
+    <label>نام<input id=dang_q_name value="${esc(q.name||'')}" placeholder="نام و نام خانوادگی"></label>
+    <label>همراه<input id=dang_q_phone inputmode=tel value="${esc(q.phone||'')}" placeholder="۰۹۱۲…"></label>
+    <button type=button class="sm pri" onclick="confirmOwnerDraftQuick()">ثبت و افزودن</button>
+    <button type=button class=sm onclick="cancelOwnerDraftQuick()">انصراف</button>
+  </div>`:'';
+  return `<div class=dang-box id=dangBox>
+    <div class=dang-box-h>
+      <b>مالکیت دانگی واحد</b>
+      <span class=fd>هر واحد حداکثر ${F(DANG_MAX)} دانگ دارد؛ مانده تا تکمیل، سهم آزاد/شرکت می‌ماند.</span>
+    </div>
+    ${dangSummaryHtml(d.owners)}
+    <div class=dang-rows>${rows}</div>
+    ${quick}
+    <div class=dang-actions>
+      <button type=button class=sm onclick="addOwnerDraft()">+ مالک از مشتریان</button>
+      <button type=button class="sm pri" onclick="addOwnerDraftQuick()">+ مالک جدید (نام و موبایل)</button>
+    </div>
+  </div>`;
+}
+function refreshOwnersPanel(){
+  const box=$('#dangBox');
+  const html=unitOwnersPanelHtml();
+  if(box)box.outerHTML=html;
+  else{
+    const mount=$('#dangMount');
+    if(mount)mount.innerHTML=html;
+  }
+}
+function syncDangPanel(m){
+  const on=!!m?.querySelector('[name=dangSplit]')?.checked;
+  if(!UNIT_OWNERS_DRAFT)UNIT_OWNERS_DRAFT={dangSplit:on,owners:[]};
+  UNIT_OWNERS_DRAFT.dangSplit=on;
+  if(!on)UNIT_OWNERS_DRAFT.owners=[];
+  refreshOwnersPanel();
+}
+function setOwnerDraftField(i,k,v){
+  if(!UNIT_OWNERS_DRAFT)return;
+  const o=UNIT_OWNERS_DRAFT.owners[i];if(!o)return;
+  if(k==='dang')o.dang=num(v);
+  else o[k]=v;
+  if(k==='dang'||k==='custId'){
+    const sumEl=$('#dangBox .dang-sum');
+    if(sumEl)sumEl.outerHTML=dangSummaryHtml(UNIT_OWNERS_DRAFT.owners);
+  }
+}
+function addOwnerDraft(){
+  if(!UNIT_OWNERS_DRAFT)UNIT_OWNERS_DRAFT={dangSplit:true,owners:[]};
+  UNIT_OWNERS_DRAFT.dangSplit=true;
+  const rem=dangRemain(UNIT_OWNERS_DRAFT.owners);
+  if(rem<=0)return toast('هر ۶ دانگ تخصیص داده شده است');
+  UNIT_OWNERS_DRAFT.owners.push({id:uid(),custId:'',dang:rem>=1?1:rem,note:''});
+  refreshOwnersPanel();
+}
+function removeOwnerDraft(i){
+  if(!UNIT_OWNERS_DRAFT)return;
+  UNIT_OWNERS_DRAFT.owners.splice(i,1);
+  refreshOwnersPanel();
+}
+function addOwnerDraftQuick(){
+  if(!UNIT_OWNERS_DRAFT)UNIT_OWNERS_DRAFT={dangSplit:true,owners:[]};
+  UNIT_OWNERS_DRAFT.dangSplit=true;
+  UNIT_OWNERS_DRAFT.quick={name:'',phone:''};
+  refreshOwnersPanel();
+  requestAnimationFrame(()=>$('#dang_q_name')?.focus());
+}
+function cancelOwnerDraftQuick(){
+  if(UNIT_OWNERS_DRAFT)delete UNIT_OWNERS_DRAFT.quick;
+  refreshOwnersPanel();
+}
+function confirmOwnerDraftQuick(){
+  if(!UNIT_OWNERS_DRAFT)return;
+  const c=quickCust({name:$('#dang_q_name')?.value,phone:$('#dang_q_phone')?.value});
+  if(!c)return;
+  delete UNIT_OWNERS_DRAFT.quick;
+  UNIT_OWNERS_DRAFT.dangSplit=true;
+  const rem=dangRemain(UNIT_OWNERS_DRAFT.owners);
+  if(rem<=0){toast('مشتری ثبت شد ولی دانگ آزادی برای تخصیص نیست');refreshOwnersPanel();return}
+  UNIT_OWNERS_DRAFT.owners.push({id:uid(),custId:c.id,dang:rem>=1?1:rem,note:''});
+  refreshOwnersPanel();
+  toast('مشتری اضافه و به مالکیت وصل شد');
+}
+function quickCust(v){
+  const name=String(v?.name||'').trim();
+  const phone=digKey(v?.phone);
+  if(!name){toast('نام را وارد کنید');return null}
+  if(!phone){toast('شماره تماس را وارد کنید');return null}
+  if(phone.length<8||phone.length>15){toast('شماره تماس معتبر نیست');return null}
+  const byPhone=findCustByPhone(phone);
+  if(byPhone){toast(`شماره تماس «${F(phone)}» تکراری است — قبلاً برای «${byPhone.name}» ثبت شده`);return null}
+  let nid='';
+  for(let i=0;i<30;i++){
+    const cand='9'+String(Math.floor(Math.random()*1e9)).padStart(9,'0');
+    if(!findCustByNid(cand)){nid=cand;break}
+  }
+  if(!nid){toast('ساخت کد ملی موقت ممکن نشد');return null}
+  const c={id:uid(),name,father:'',nid,bc:'',phone,addr:'',kyc:{},notes:[]};
+  S.customers.push(c);
+  save();
+  return c;
+}
 /** Derive ppm/total pair from whichever side the user filled. */
 const pairPrices=(area,ppm,total)=>{
   let p=num(ppm),t=num(total),a=num(area);
@@ -601,6 +1182,8 @@ function cloneUnitData(src,overrides){
     storageArea:num(src.storageArea),
     handReady:!!src.handReady,
     handDate:src.handDate||'',
+    dangSplit:!!src.dangSplit,
+    owners:cloneOwners(src.owners),
     ...(overrides||{}),
   };
 }
@@ -613,9 +1196,9 @@ function focusUnitEdit(){
   });
 }
 function projV(){return `<div class=top><h2>پروژه‌ها</h2>${can('write')?`<button class="btn-soft" onclick=addP()><span class=plus>+</span> پروژه جدید</button>`:''}</div>${sb()}<div class=cards>${S.projects.map(p=>`<div class=card data-s="${esc(N(p.name+p.addr+(p.vcName||'')+(p.vcPhone||'')+p.units.map(u=>u.no).join(' ')))}" onclick="go('pd','${p.id}')"><b>${esc(p.name)}</b><small>${esc(p.addr)}</small><div class=meta><span>${F(p.units.length)} واحد</span><span>${F(p.units.filter(u=>u.st=='free').length)} آزاد</span><span>ارزش کل: ${money(sum(p.units,u=>u.total))}</span></div><div class=fd style="margin-top:8px">${p.vcName?`مسئول بازدید: <b>${esc(p.vcName)}</b> · ${F(p.vcPhone||'—')}`:'<span class="badge warn">مسئول بازدید تعریف نشده</span>'}</div></div>`).join('')||empty('هنوز پروژه‌ای ثبت نشده. با «پروژه جدید» شروع کنید.')}</div>`}
-function addP(){form('پروژه جدید',PF_PROJ,0,v=>{askConfirm({title:'تأیید ثبت پروژه',body:`<p>پروژه <b>${esc(v.name)}</b> ثبت شود؟</p>`},()=>{S.projects.push({id:uid(),name:v.name,addr:v.addr,note:v.note,vcName:v.vcName,vcPhone:N(v.vcPhone),vcNote:v.vcNote,units:[]});save();render();toast('پروژه ثبت شد');return true});return false})}
+function addP(){form('پروژه جدید',PF_PROJ,0,v=>{askConfirm({title:'تأیید ثبت پروژه',body:`<p>پروژه <b>${esc(v.name)}</b> ثبت شود؟</p>`},()=>{S.projects.push({id:uid(),name:v.name,addr:v.addr,note:v.note,vcName:v.vcName,vcPhone:N(v.vcPhone),vcNote:v.vcNote,units:[]});render();persistAfter('پروژه ثبت شد');return true});return false})}
 function editP(){const p=proj(V.id);if(!p)return;form('ویرایش پرونده پروژه',PF_PROJ,p,v=>{
-  askConfirm({title:'تأیید ذخیره پروژه',body:`<p>تغییرات پروژه <b>${esc(v.name)}</b> ذخیره شود؟</p><div class=confirm-summary><p>مسئول بازدید: <b>${esc(v.vcName)}</b></p><p>شماره: <b>${F(v.vcPhone||'—')}</b></p></div>`},()=>{Object.assign(p,{name:v.name,addr:v.addr,note:v.note,vcName:v.vcName,vcPhone:N(v.vcPhone),vcNote:v.vcNote});save();render();toast('پروژه ذخیره شد');return true});
+  askConfirm({title:'تأیید ذخیره پروژه',body:`<p>تغییرات پروژه <b>${esc(v.name)}</b> ذخیره شود؟</p><div class=confirm-summary><p>مسئول بازدید: <b>${esc(v.vcName)}</b></p><p>شماره: <b>${F(v.vcPhone||'—')}</b></p></div>`},()=>{Object.assign(p,{name:v.name,addr:v.addr,note:v.note,vcName:v.vcName,vcPhone:N(v.vcPhone),vcNote:v.vcNote});render();persistAfter('پروژه ذخیره شد');return true});
   return false;
 })}
 function unitCardHtml(u){
@@ -634,10 +1217,10 @@ function unitCardHtml(u){
         <label class="${hint||dupNow?'need-no':''}">شماره واحد<input id=ue_no value="${esc(u.no)}" aria-invalid="${dupNow?'true':'false'}"><small class=fld-hint>${dupNow?'این شماره تکراری است':'در پروژه یکتا باشد'}</small></label>
         <label>بلوک / فاز<input id=ue_block value="${esc(u.block||'')}" placeholder="مثلاً A یا بلوک غرب"></label>
         <label>طبقه<select id=ue_floor>${unitSelOpts(UF_FLOOR,u.floor||'')}</select></label>
-        <label>کاربری<select id=ue_kind>${UF_KIND.map(([k,l])=>`<option value="${k}" ${u.kind===k?'selected':''}>${l}</option>`).join('')}</select></label>
+        <label>کاربری<select id=ue_kind>${unitSelOpts(UF_KIND,u.kind||'')}</select></label>
         <label>متراژ واحد (م²)<input id=ue_area inputmode=numeric value="${esc(F(u.area))}" oninput="fmtIn(this)"></label>
         <label>تعداد خواب<select id=ue_rooms>${unitSelOpts(UF_ROOMS,u.rooms?String(u.rooms):'')}</select></label>
-        <label class=span2>موقعیت واحد<select id=ue_face>${UF_FACE.map(([k,l])=>`<option value="${esc(k)}" ${(u.face||'')===k?'selected':''}>${esc(l)}</option>`).join('')}</select></label>
+        <label class=span2>موقعیت واحد<select id=ue_face>${unitSelOpts(UF_FACE,u.face||'')}</select></label>
         <div class="uc-price-block span2">
           <div class=uc-price-h>قیمت خام شرکتی <small>یکی از متری یا کل کافی است</small></div>
           <div class=uc-price-row>
@@ -659,6 +1242,8 @@ function unitCardHtml(u){
         <label id=ue_store_a_wrap ${u.storage||u.storageCount?'':'hidden'}>متراژ انباری (م²)<input id=ue_storageArea inputmode=decimal value="${u.storageArea?esc(F(u.storageArea)):''}"></label>
         <label>وضعیت تحویل<select id=ue_handReady onchange="toggleUnitExtra('hand',this.value==='1')">${UF_HAND.map(([k,l])=>`<option value="${k}" ${(u.handReady?'1':'0')===k?'selected':''}>${l}</option>`).join('')}</select></label>
         <label id=ue_hand_wrap>تاریخ تکمیل / تحویل<input id=ue_handDate readonly style="cursor:pointer" value="${u.handDate?F(u.handDate):''}" placeholder="انتخاب از تقویم" onclick="dpick(this)"></label>
+        <label class="span2 dang-toggle"><input id=ue_dangSplit type=checkbox style="width:auto" ${u.dangSplit?'checked':''} onchange="toggleUnitDangSplit(this.checked)"> تقسیط دانگی (۶ دانگ) — امکان تعریف چند مالک</label>
+        <div class="span2" id=dangMount>${unitOwnersPanelHtml()}</div>
       </div>
       <div class=uc-actions>
         <button class=pri onclick="saveUnitEdit('${u.id}')">ذخیره تغییرات</button>
@@ -668,7 +1253,7 @@ function unitCardHtml(u){
   }
   return `<article class=uc data-s="${esc(unitSearchBlob(u))}">
     <header class=uc-head>
-      <div><span class=uc-no>واحد ${esc(u.no)}${u.block?` · ${esc(u.block)}`:''}</span><span class="badge ${u.st}">${UST[u.st]}</span></div>
+      <div><span class=uc-no>واحد ${esc(u.no)}${u.block?` · ${esc(u.block)}`:''}</span><span class="badge ${u.st}">${UST[u.st]}</span>${u.dangSplit?`<span class="badge warn">تقسیط دانگی</span>`:''}</div>
       ${can('write')?`<div class=uc-tools>
         <button class="icon-btn" title="ویرایش" onclick="startUnitEdit('${u.id}')">✎</button>
         <button class="icon-btn copy" title="کپی همین واحد" onclick="dupU('${u.id}')"><span class=plus>+</span></button>
@@ -692,8 +1277,15 @@ function unitCardHtml(u){
         <span>تکمیل‌شده</span>
         <strong>${(num(u.total)||num(u.ppm))?`${money(u.ppm||0)} /م² · <b class=uc-price>${money(u.total||0)} تومان</b>`:'—'}</strong>
       </div>
+      ${unitOwnersViewHtml(u)}
     </div>
   </article>`;
+}
+function toggleUnitDangSplit(on){
+  if(!UNIT_OWNERS_DRAFT)UNIT_OWNERS_DRAFT={dangSplit:!!on,owners:[]};
+  UNIT_OWNERS_DRAFT.dangSplit=!!on;
+  if(!on){UNIT_OWNERS_DRAFT.owners=[];delete UNIT_OWNERS_DRAFT.quick}
+  refreshOwnersPanel();
 }
 function toggleUnitExtra(kind,on){
   if(kind==='park'){const w=$('#ue_park_wrap');if(w)w.hidden=!on;if(on&&!$('#ue_parkingCount').value)$('#ue_parkingCount').value='1'}
@@ -782,8 +1374,11 @@ function pd(){const p=proj(V.id);if(!p)return projV();
     ${units.length?`<div class=unit-grid>${units.map(unitCardHtml).join('')}</div>`:empty(p.units.length?'واحدی با این مشخصات پیدا نشد.':'واحدی تعریف نشده است.')}
   </section>
  </div>`;}
-function startUnitEdit(id){UNIT_EDIT=id;UNIT_DUP_HINT=null;render();focusUnitEdit()}
-function cancelUnitEdit(){UNIT_EDIT=null;UNIT_DUP_HINT=null;render()}
+function startUnitEdit(id){
+  const p=proj(V.id);const u=p?.units?.find(x=>x.id===id);
+  UNIT_EDIT=id;UNIT_DUP_HINT=null;UNIT_OWNERS_DRAFT=draftOwnersFrom(u);render();focusUnitEdit();
+}
+function cancelUnitEdit(){UNIT_EDIT=null;UNIT_DUP_HINT=null;UNIT_OWNERS_DRAFT=null;render()}
 function dupU(id){
   if(!can('write'))return toast('اجازه ثبت ندارید');
   const p=proj(V.id);if(!p)return;
@@ -794,6 +1389,7 @@ function dupU(id){
   p.units.splice(idx<0?p.units.length:idx+1,0,copy);
   UNIT_EDIT=copy.id;
   UNIT_DUP_HINT={id:copy.id,from:src.no,fromBlock:src.block||'',suggested:nextNo};
+  UNIT_OWNERS_DRAFT=draftOwnersFrom(copy);
   save();
   render();
   focusUnitEdit();
@@ -860,11 +1456,21 @@ function saveUnitEdit(id){
       ?`شماره واحد «${next.no}» در بلوک «${next.block}» تکراری است`
       :`شماره واحد «${next.no}» تکراری است؛ عوضش کنید`);
   }
-  askConfirm({title:'تأیید ذخیره واحد',body:`<p>تغییرات واحد <b>${esc(next.no)}</b> ذخیره شود؟</p><div class=confirm-summary><p>${esc(next.kind)}${next.block?' · بلوک '+esc(next.block):''} · طبقه ${esc(next.floor||'—')} · ${F(next.area)} م²${next.rooms?' · '+F(next.rooms)+' خواب':''}${next.face?' · '+esc(next.face):''}</p><p>پارکینگ: ${esc(unitParkLabel(next))} · انباری: ${esc(unitStoreLabel(next))} · تحویل: ${esc(unitHandLabel(next))}</p><p>${esc(unitPriceSummary(next))}</p></div>`},()=>{
-    Object.assign(u,next);UNIT_EDIT=null;UNIT_DUP_HINT=null;save();render();toast('واحد ذخیره شد');return true;
+  if(UNIT_OWNERS_DRAFT)UNIT_OWNERS_DRAFT.dangSplit=!!$('#ue_dangSplit')?.checked;
+  const own=validateOwnersDraft();
+  if(!own.ok)return;
+  next.dangSplit=own.dangSplit;
+  next.owners=own.owners;
+  const ownLine=own.dangSplit
+    ?`تقسیط دانگی: ${F(dangSum(own.owners))} از ${F(DANG_MAX)} · ${F(own.owners.length)} مالک`
+    :'بدون تقسیط دانگی';
+  askConfirm({title:'تأیید ذخیره واحد',body:`<p>تغییرات واحد <b>${esc(next.no)}</b> ذخیره شود؟</p><div class=confirm-summary><p>${esc(next.kind)}${next.block?' · بلوک '+esc(next.block):''} · طبقه ${esc(next.floor||'—')} · ${F(next.area)} م²${next.rooms?' · '+F(next.rooms)+' خواب':''}${next.face?' · '+esc(next.face):''}</p><p>پارکینگ: ${esc(unitParkLabel(next))} · انباری: ${esc(unitStoreLabel(next))} · تحویل: ${esc(unitHandLabel(next))}</p><p>${esc(unitPriceSummary(next))}</p><p>${esc(ownLine)}</p></div>`},()=>{
+    Object.assign(u,next);UNIT_EDIT=null;UNIT_DUP_HINT=null;UNIT_OWNERS_DRAFT=null;render();persistAfter('واحد ذخیره شد');return true;
   });
 }
-function addU(){form('واحد جدید',[
+function addU(){
+ UNIT_OWNERS_DRAFT={dangSplit:false,owners:[]};
+ form('واحد جدید',[
   {k:'no',l:'شماره واحد',r:1},{k:'block',l:'بلوک / فاز'},{k:'floor',l:'طبقه',t:'select',o:UF_FLOOR},{k:'kind',l:'کاربری',t:'select',o:UF_KIND},
   {k:'area',l:'متراژ واحد (متر مربع)',r:1},{k:'rooms',l:'تعداد خواب',t:'select',o:UF_ROOMS},{k:'face',l:'موقعیت واحد',t:'select',o:UF_FACE},
   {k:'ppmRaw',l:'خام شرکتی – قیمت هر متر (تومان)',t:'money'},{k:'totalRaw',l:'خام شرکتی – قیمت کل (تومان)',t:'money'},
@@ -872,7 +1478,9 @@ function addU(){form('واحد جدید',[
   {k:'parking',l:'پارکینگ',t:'select',o:UF_YN},{k:'parkingCount',l:'تعداد ماشین (اگر دارد)',t:'select',o:UF_PARK_N,d:'1'},
   {k:'storage',l:'انباری',t:'select',o:UF_YN},{k:'storageCount',l:'تعداد انباری (اگر دارد)',t:'select',o:UF_STORE_N,d:'1'},{k:'storageArea',l:'متراژ انباری (م²)'},
   {k:'handReady',l:'وضعیت تحویل',t:'select',o:UF_HAND},{k:'handDate',l:'تاریخ تکمیل / تحویل',j:1},
-],0,v=>{
+  {k:'dangSplit',l:'تقسیط دانگی (۶ دانگ) — امکان تعریف چند مالک',t:'check',w:1,on:(m)=>syncDangPanel(m)},
+  {t:'html',html:'<div id=dangMount></div>'},
+],{_boxClass:'box-wide'},v=>{
   const p=proj(V.id);if(!p)return false;
   const a=num(v.area);v.area=a;
   const fin=pairPrices(a,v.ppm,v.total);
@@ -884,9 +1492,15 @@ function addU(){form('واحد جدید',[
     toast(extra.block?`شماره واحد «${v.no}» در بلوک «${extra.block}» تکراری است`:`شماره واحد «${v.no}» تکراری است`);
     return false;
   }
-  askConfirm({title:'تأیید ثبت واحد',body:`<p>واحد <b>${esc(v.no)}</b>${extra.block?' · بلوک '+esc(extra.block):''} اضافه شود؟</p><p class=fd>${esc(v.kind)} · ${F(a)} م² · ${esc(unitPriceSummary(v))}</p><p class=fd>پارکینگ ${esc(unitParkLabel(extra))} · انباری ${esc(unitStoreLabel(extra))} · تحویل ${esc(unitHandLabel(extra))}</p>`},()=>{
-    p.units.push(cloneUnitData({...v,...extra},{no:v.no,st:'free'}));
-    save();render();toast('واحد ثبت شد');return true;
+  if(UNIT_OWNERS_DRAFT)UNIT_OWNERS_DRAFT.dangSplit=!!v.dangSplit;
+  const own=validateOwnersDraft();
+  if(!own.ok)return false;
+  const ownLine=own.dangSplit
+    ?`تقسیط دانگی: ${F(dangSum(own.owners))} از ${F(DANG_MAX)} · ${F(own.owners.length)} مالک`
+    :'بدون تقسیط دانگی';
+  askConfirm({title:'تأیید ثبت واحد',body:`<p>واحد <b>${esc(v.no)}</b>${extra.block?' · بلوک '+esc(extra.block):''} اضافه شود؟</p><p class=fd>${esc(v.kind)} · ${F(a)} م² · ${esc(unitPriceSummary(v))}</p><p class=fd>پارکینگ ${esc(unitParkLabel(extra))} · انباری ${esc(unitStoreLabel(extra))} · تحویل ${esc(unitHandLabel(extra))}</p><p class=fd>${esc(ownLine)}</p>`},()=>{
+    p.units.push(cloneUnitData({...v,...extra,dangSplit:own.dangSplit,owners:own.owners},{no:v.no,st:'free'}));
+    UNIT_OWNERS_DRAFT=null;render();persistAfter('واحد ثبت شد');return true;
   });
   return false;
 })}
@@ -949,7 +1563,7 @@ function delU(id){
     if(UNIT_EDIT===id)UNIT_EDIT=null;
     if(UNIT_DUP_HINT&&UNIT_DUP_HINT.id===id)UNIT_DUP_HINT=null;
     await purgeLinkedCases({contractIds,reservationIds});
-    save();render();toast('واحد و وابستگی‌ها حذف شد');return true;
+    render();persistAfter('واحد و وابستگی‌ها حذف شد');return true;
   });
 }
 function delP(){
@@ -977,7 +1591,7 @@ function delP(){
     S.projects=S.projects.filter(x=>x.id!=p.id);
     UNIT_EDIT=null;
     await purgeLinkedCases({projectIds:[p.id],contractIds,reservationIds});
-    save();go('proj');toast('پروژه حذف شد');return true;
+    go('proj');persistAfter('پروژه حذف شد');return true;
   });
 }
 // مشتریان
@@ -1005,9 +1619,14 @@ function findPayRefHit(ref,except){
   }
   for(const c of S.contracts||[]){
     for(const i of c.inst||[]){
-      if(!i.paid||!i.ref)continue;
       if(except?.kind==='inst'&&except.id===i.id)continue;
-      if(refKey(i.ref)===k)return{kind:'قسط قرارداد',no:c.no,who:(cust(c.cust)||{}).name||'—'};
+      for(const p of instPays(i)){
+        if(except?.kind==='instPay'&&except.id===p.id)continue;
+        if(p.ref&&refKey(p.ref)===k)return{kind:'قسط قرارداد',no:c.no,who:(cust(c.cust)||{}).name||'—'};
+      }
+      if((!i.pays||!i.pays.length)&&i.paid&&i.ref&&refKey(i.ref)===k){
+        return{kind:'قسط قرارداد',no:c.no,who:(cust(c.cust)||{}).name||'—'};
+      }
     }
   }
   for(const row of S.ledger||[]){
@@ -1056,6 +1675,224 @@ function assertPayRef(ref,except){
   return false;
 }
 const CF=[{k:'name',l:'نام و نام خانوادگی / شرکت',r:1},{k:'father',l:'نام پدر'},{k:'nid',l:'کد ملی / شناسه ملی',r:1},{k:'bc',l:'شماره شناسنامه'},{k:'phone',l:'شماره همراه',r:1},{k:'addr',l:'نشانی',t:'area',w:1}];
+function toggleInlineCust(m){
+  const on=!!m.querySelector('[name=newCust]')?.checked;
+  const hide=(k,h)=>{const e=m.querySelector(`[name=${k}]`);const lab=e?.closest('label');if(lab)lab.hidden=!!h};
+  hide('cust',on);
+  CF.forEach(f=>hide(f.k,!on));
+  if(on){
+    const name=(m.querySelector('[name=name]')?.value||'').trim();
+    const payer=m.querySelector('[name=payer]');
+    if(payer&&name)payer.value=name;
+  }
+}
+function parseFormCust(v){
+  if(v.newCust){
+    const cv={
+      name:String(v.name||'').trim(),
+      father:String(v.father||'').trim(),
+      nid:v.nid,
+      bc:v.bc||'',
+      phone:v.phone,
+      addr:String(v.addr||'').trim()
+    };
+    if(!cv.name){toast('نام مشتری را وارد کنید');return null}
+    if(!assertCustUniq(cv))return null;
+    return{mode:'new',cv};
+  }
+  if(!v.cust){toast('مشتری را انتخاب کنید یا تعریف دستی را فعال کنید');return null}
+  return{mode:'sel',id:v.cust};
+}
+function commitFormCust(parsed){
+  if(!parsed)return null;
+  if(parsed.mode==='new'){
+    const c={id:uid(),...parsed.cv,kyc:{},notes:[]};
+    S.customers.push(c);
+    return c.id;
+  }
+  return parsed.id;
+}
+function inlineCustFields(opts){
+  opts=opts||{};
+  const forceNew=!!opts.forceNew;
+  const custOpts=(S.customers||[]).length
+    ?S.customers.map(c=>[c.id,c.name+' – '+c.nid])
+    :[['','— مشتری‌ای ثبت نشده؛ تعریف دستی را بزنید']];
+  return [
+    {k:'newCust',l:'تعریف دستی مشتری (هم‌زمان در لیست مشتریان ثبت می‌شود)',t:'check',w:1,d:forceNew,on:(m)=>toggleInlineCust(m)},
+    {k:'cust',l:opts.custLabel||'مشتری',t:'select',o:custOpts,on:opts.custOn},
+    ...CF.map(f=>({...f,on:f.k==='name'&&opts.syncPayer?(m)=>{const payer=m.querySelector('[name=payer]');const name=(m.querySelector('[name=name]')?.value||'').trim();if(payer&&name)payer.value=name}:f.on}))
+  ];
+}
+const IU_KEYS=['projId','u_no','u_block','u_floor','u_kind','u_area','u_rooms','u_face','u_ppm','u_total','u_ppmRaw','u_totalRaw','dangSplit'];
+function projectOpts(){
+  return (S.projects||[]).map(p=>[p.id,`${p.name}${p.addr?' – '+p.addr:''}`]);
+}
+function hideFormField(m,k,h){
+  const e=m.querySelector(`[name=${k}]`);
+  const lab=e?.closest('label');
+  if(lab)lab.hidden=!!h;
+}
+function setInlineDangVisible(m,on){
+  hideFormField(m,'dangSplit',!on);
+  const wrap=m.querySelector('#inlineDangWrap');
+  const field=wrap?.closest('.field')||wrap;
+  if(field)field.hidden=!on;
+  if(!on){
+    const chk=m.querySelector('[name=dangSplit]');
+    if(chk)chk.checked=false;
+    UNIT_OWNERS_DRAFT=null;
+    const mount=m.querySelector('#dangMount');
+    if(mount)mount.innerHTML='';
+    return;
+  }
+  if(!UNIT_OWNERS_DRAFT)UNIT_OWNERS_DRAFT={dangSplit:!!m.querySelector('[name=dangSplit]')?.checked,owners:[]};
+  UNIT_OWNERS_DRAFT.dangSplit=!!m.querySelector('[name=dangSplit]')?.checked;
+  if(!UNIT_OWNERS_DRAFT.dangSplit)UNIT_OWNERS_DRAFT.owners=[];
+  refreshOwnersPanel();
+}
+function syncInlineUnitPrice(m){
+  if(!m.querySelector('[name=newUnit]')?.checked)return;
+  if(!m.querySelector('[name=base]'))return;
+  const area=num(m.querySelector('[name=u_area]')?.value);
+  const fin=pairPrices(area,m.querySelector('[name=u_ppm]')?.value,m.querySelector('[name=u_total]')?.value);
+  const raw=pairPrices(area,m.querySelector('[name=u_ppmRaw]')?.value,m.querySelector('[name=u_totalRaw]')?.value);
+  const sale=fin.total||raw.total||0;
+  if(!(sale>0))return;
+  setM(m,'base',sale);
+  if(typeof syncContractPrice==='function')syncContractPrice(m);
+}
+function onInlineUnitMeasure(m,src){
+  if(!m.querySelector('[name=newUnit]')?.checked)return;
+  const area=num(m.querySelector('[name=u_area]')?.value);
+  const setMoney=(k,val)=>{
+    const e=m.querySelector(`[name=${k}]`);
+    if(!e)return;
+    e.value=val?F(Math.round(val).toLocaleString('en')).replace(/,/g,'٬'):'';
+  };
+  if(src==='ppm'||src==='total'){
+    const ppm=num(m.querySelector('[name=u_ppm]')?.value),total=num(m.querySelector('[name=u_total]')?.value);
+    if(src==='ppm'&&area&&ppm)setMoney('u_total',area*ppm);
+    if(src==='total'&&area&&total)setMoney('u_ppm',total/area);
+  }
+  if(src==='ppmRaw'||src==='totalRaw'){
+    const ppm=num(m.querySelector('[name=u_ppmRaw]')?.value),total=num(m.querySelector('[name=u_totalRaw]')?.value);
+    if(src==='ppmRaw'&&area&&ppm)setMoney('u_totalRaw',area*ppm);
+    if(src==='totalRaw'&&area&&total)setMoney('u_ppmRaw',total/area);
+  }
+  syncInlineUnitPrice(m);
+}
+function toggleInlineUnit(m){
+  const on=!!m.querySelector('[name=newUnit]')?.checked;
+  hideFormField(m,'unit',on);
+  IU_KEYS.forEach(k=>hideFormField(m,k,!on));
+  setInlineDangVisible(m,on);
+  if(on){
+    const projEl=m.querySelector('[name=projId]');
+    if(projEl&&!projEl.value&&(S.projects||[]).length)projEl.value=S.projects[0].id;
+    syncInlineUnitPrice(m);
+  }else{
+    const uv=m.querySelector('[name=unit]')?.value||'';
+    const[a,b]=String(uv).split('|');
+    if(a&&b&&m.querySelector('[name=base]')){
+      setM(m,'base',unitSaleTotal(unitOf(a,b)));
+      if(typeof syncContractPrice==='function')syncContractPrice(m);
+    }
+  }
+}
+function parseFormUnit(v){
+  if(v.newUnit){
+    if(!(S.projects||[]).length){toast('ابتدا یک پروژه ثبت کنید');return null}
+    if(!v.projId){toast('پروژه را انتخاب کنید');return null}
+    const p=proj(v.projId);if(!p){toast('پروژه پیدا نشد');return null}
+    const no=String(v.u_no||'').trim();
+    if(!no){toast('شماره واحد را وارد کنید');return null}
+    const area=num(v.u_area);
+    if(!(area>0)){toast('متراژ واحد را وارد کنید');return null}
+    const fin=pairPrices(area,v.u_ppm,v.u_total);
+    const raw=pairPrices(area,v.u_ppmRaw,v.u_totalRaw);
+    if(UNIT_OWNERS_DRAFT)UNIT_OWNERS_DRAFT.dangSplit=!!v.dangSplit;
+    else if(v.dangSplit)UNIT_OWNERS_DRAFT={dangSplit:true,owners:[]};
+    const own=validateOwnersDraft();
+    if(!own.ok)return null;
+    const draft={
+      no,
+      floor:v.u_floor||'',
+      kind:v.u_kind||'مسکونی',
+      area,
+      ppm:fin.ppm,
+      total:fin.total,
+      ppmRaw:raw.ppm,
+      totalRaw:raw.total,
+      block:String(v.u_block||'').trim(),
+      rooms:num(v.u_rooms),
+      face:v.u_face||'',
+      parking:false,parkingCount:0,
+      storage:false,storageCount:0,storageArea:0,
+      handReady:false,handDate:'',
+      dangSplit:own.dangSplit,
+      owners:own.owners
+    };
+    if(!unitHasPrice(draft)){toast('حداقل یکی از قیمت‌های خام یا تکمیل‌شده واحد را وارد کنید');return null}
+    if(unitNoConflict(p,draft.no,draft.block)){
+      toast(draft.block?`شماره واحد «${draft.no}» در بلوک «${draft.block}» این پروژه تکراری است`:`شماره واحد «${draft.no}» در این پروژه تکراری است`);
+      return null;
+    }
+    return{mode:'new',projId:p.id,projName:p.name,draft};
+  }
+  if(!v.unit){toast('واحد را انتخاب کنید یا تعریف دستی را فعال کنید');return null}
+  const[pid,uid]=String(v.unit).split('|');
+  if(!pid||!uid||!unitOf(pid,uid).id){toast('واحد معتبر نیست');return null}
+  return{mode:'sel',projId:pid,unitId:uid};
+}
+function commitFormUnit(parsed,st){
+  if(!parsed)return null;
+  if(parsed.mode==='new'){
+    const p=proj(parsed.projId);if(!p)return null;
+    const u=cloneUnitData(parsed.draft,{no:parsed.draft.no,st:st||'free'});
+    p.units=p.units||[];
+    p.units.push(u);
+    return{projId:p.id,unitId:u.id,created:true,unit:u};
+  }
+  return{projId:parsed.projId,unitId:parsed.unitId,created:false,unit:unitOf(parsed.projId,parsed.unitId)};
+}
+function inlineUnitFields(opts){
+  opts=opts||{};
+  const forceNew=!!opts.forceNew;
+  const units=unitOpts(opts.preUnit);
+  const projects=projectOpts();
+  const bindArea=(m,f)=>{
+    if(f){
+      const e=m.querySelector('[name=u_area]');
+      if(e)e.oninput=()=>onInlineUnitMeasure(m,'area');
+    }
+    onInlineUnitMeasure(m,'area');
+  };
+  return [
+    {k:'newUnit',l:'تعریف دستی واحد (پروژه را انتخاب کنید؛ واحد هم‌زمان در پروژه ثبت می‌شود)',t:'check',w:1,d:forceNew,on:(m,init)=>{
+      if(init)queueMicrotask(()=>toggleInlineUnit(m));
+      else toggleInlineUnit(m);
+    }},
+    {k:'unit',l:opts.unitLabel||'واحد',t:'select',o:units.length?units:[['','— واحد آزادی نیست؛ تعریف دستی را بزنید']],on:opts.unitOn},
+    {k:'projId',l:'پروژه',t:'select',o:projects.length?projects:[['','— ابتدا یک پروژه بسازید']],r:1},
+    {k:'u_no',l:'شماره واحد',r:1},
+    {k:'u_block',l:'بلوک / فاز'},
+    {k:'u_floor',l:'طبقه',t:'select',o:UF_FLOOR},
+    {k:'u_kind',l:'کاربری',t:'select',o:UF_KIND,d:'مسکونی'},
+    {k:'u_area',l:'متراژ واحد (م²)',r:1,on:bindArea},
+    {k:'u_rooms',l:'تعداد خواب',t:'select',o:UF_ROOMS},
+    {k:'u_face',l:'موقعیت واحد',t:'select',o:UF_FACE},
+    {k:'u_ppm',l:'تکمیل‌شده – قیمت هر متر (تومان)',t:'money',on:(m)=>onInlineUnitMeasure(m,'ppm')},
+    {k:'u_total',l:'تکمیل‌شده – قیمت کل (تومان)',t:'money',on:(m)=>onInlineUnitMeasure(m,'total')},
+    {k:'u_ppmRaw',l:'خام شرکتی – قیمت هر متر (تومان)',t:'money',on:(m)=>onInlineUnitMeasure(m,'ppmRaw')},
+    {k:'u_totalRaw',l:'خام شرکتی – قیمت کل (تومان)',t:'money',on:(m)=>onInlineUnitMeasure(m,'totalRaw')},
+    {k:'dangSplit',l:'تقسیط دانگی همین واحد (۶ دانگ) — مالک‌ها را اینجا تعریف کنید',t:'check',w:1,on:(m,init)=>{
+      if(init)return;
+      syncDangPanel(m);
+    }},
+    {t:'html',html:'<div id=inlineDangWrap class=inline-dang><div id=dangMount></div></div>'}
+  ];
+}
 function custV(){const q=N(Q).toLowerCase(),L=S.customers.filter(c=>!q||(c.name+c.nid+c.phone).toLowerCase().includes(q));
  return `<div class=top><h2>مشتریان</h2><div><button class=pri onclick=addCu()>مشتری جدید</button></div></div>${sb()}${L.length?tbl(['نام','پدر','کد ملی','همراه','قراردادها',''],L.map(c=>`<tr data-s="${esc(N(c.name+c.nid+c.phone))}"><td>${esc(c.name)}</td><td>${esc(c.father)}</td><td>${F(c.nid)}</td><td><a class=ph href="tel:${N(c.phone)}">${F(c.phone)}</a></td><td>${F(S.contracts.filter(x=>x.cust==c.id).length)}</td><td><button class="sm pri" onclick="go('cv','${c.id}')">پرونده</button> <button class=sm onclick="editCu('${c.id}')">ویرایش</button> <button class=sm onclick="addC({cust:'${c.id}'})">قرارداد</button> <button class="sm" onclick="addR({cust:'${c.id}'})">رزرو</button> <button class="sm x" onclick="delCu('${c.id}')">حذف</button></td></tr>`).join('')):empty('مشتری‌ای ثبت نشده است.')}`}
 const addCu=()=>form('مشتری جدید',CF,0,v=>{
@@ -1072,6 +1909,30 @@ const editCu=id=>form('ویرایش مشتری',CF,cust(id),v=>{
   });
   return false;
 });
+function countCustDangShares(id){
+  let n=0;
+  S.projects.forEach(p=>(p.units||[]).forEach(u=>{(u.owners||[]).forEach(o=>{if(o.custId===id)n++})}));
+  return n;
+}
+function stripCustDangShares(id){
+  let n=0;
+  S.projects.forEach(p=>(p.units||[]).forEach(u=>{
+    const before=(u.owners||[]).length;
+    u.owners=(u.owners||[]).filter(o=>o.custId!==id);
+    n+=before-u.owners.length;
+  }));
+  return n;
+}
+function custDangShares(id){
+  const out=[];
+  S.projects.forEach(p=>(p.units||[]).forEach(u=>{
+    if(!u.dangSplit)return;
+    (u.owners||[]).forEach(o=>{
+      if(o.custId===id)out.push({proj:p,unit:u,owner:o});
+    });
+  }));
+  return out;
+}
 function delCu(id){
   if(!canDeleteRec())return toast('اجازه حذف ندارید');
   const c=cust(id);if(!c?.id)return;
@@ -1081,12 +1942,14 @@ function delCu(id){
   const parties=(S.parties||[]).filter(p=>p.custId===id);
   const ledgers=parties.length?(S.ledger||[]).filter(r=>parties.some(p=>p.id===r.party)).length:0;
   const checks=parties.length?(S.checks||[]).filter(ch=>parties.some(p=>p.id===ch.party)).length:0;
+  const dangShares=countCustDangShares(id);
   askConfirm({
     title:'حذف کامل پرونده مشتری',
     body:`<p>مشتری <b>${esc(c.name)}</b> و همه پرونده‌های وابسته حذف شود؟</p>${delSummary([
       {n:cs.length,l:'قرارداد'},
       {n:rs.length,l:'رزرو'},
       {n:ls.length,l:'پیوند سرنخ (جدا می‌شود)'},
+      {n:dangShares,l:'سهم دانگی از واحدها (حذف می‌شود)'},
       {n:parties.length,l:'پرونده حسابداری'},
       {n:ledgers,l:'تراکنش دفترکل'},
       {n:checks,l:'چک'},
@@ -1098,6 +1961,7 @@ function delCu(id){
     cs.forEach(removeContractCore);
     rs.forEach(removeReservationCore);
     S.leads.forEach(l=>{if(l.cust===id)l.cust=''});
+    stripCustDangShares(id);
     removeAcctForCustomer(id);
     dropLocalCases(x=>x.customer?.id===id);
     S.customers=S.customers.filter(x=>x.id!=id);
@@ -1111,12 +1975,14 @@ function delCu(id){
 // قراردادها
 const unitOpts=pre=>S.projects.flatMap(p=>p.units.filter(u=>u.st=='free'||p.id+'|'+u.id==pre).map(u=>[p.id+'|'+u.id,`${p.name} – واحد ${u.no} (${F(u.area)} م²)`]));
 function contStatus(c){
-  const unpaid=(c.inst||[]).filter(i=>!i.paid);
+  const unpaid=(c.inst||[]).filter(i=>!isInstPaid(i));
   if(!unpaid.length)return{k:'ok',l:'تسویه کامل'};
   const late=unpaid.filter(i=>diff(i.date)<0);
   if(late.length)return{k:'bad',l:F(late.length)+' قسط معوق'};
   const soon=unpaid.filter(i=>diff(i.date)<=7);
   if(soon.length)return{k:'warn',l:'سررسید نزدیک'};
+  const partial=(c.inst||[]).filter(isInstPartial).length;
+  if(partial)return{k:'warn',l:F(partial)+' قسط با مانده'};
   return{k:'ok',l:'جاری'};
 }
 function cont(){
@@ -1126,7 +1992,7 @@ function cont(){
     ${can('write')?`<button class=btn-soft onclick="addC()"><span class=plus>+</span> قرارداد جدید</button>`:''}
   </div>${sb()}
   ${list.length?`<div class=cont-grid>${list.map(c=>{
-    const cu=cust(c.cust),paid=paidSum(c),rem=Math.max(0,c.total-paid),next=(c.inst||[]).find(i=>!i.paid),st=contStatus(c);
+    const cu=cust(c.cust),paid=paidSum(c),rem=Math.max(0,c.total-paid),next=(c.inst||[]).find(i=>!isInstPaid(i)),st=contStatus(c),ist=instStats(c);
     const pct=c.total>0?Math.min(100,Math.round(paid/c.total*100)):0;
     const nextDiff=next?diff(next.date):null;
     const nextTone=nextDiff==null?'':nextDiff<0?'is-late':nextDiff<=7?'is-soon':'';
@@ -1169,6 +2035,7 @@ function cont(){
         </div>
         <div class=barwrap title="${pct}%"><div class=barfill style="width:${pct}%"></div></div>
       </div>
+      <div class=cc-inst-pill>اقساط پرداخت‌شده <b>${F(ist.paid)}</b> از <b>${F(ist.total)}</b> · باقی‌مانده <b>${F(ist.unpaid+ist.partial)}</b></div>
       <div class=cc-foot>
         <div class="cc-next ${nextTone}">
           <span>قسط بعدی</span>
@@ -1237,14 +2104,39 @@ function contractPriceSummaryHtml(r){
   rows.push(`<div class=cprice-sum-final><span>مبلغ نهایی</span><b>${money(r.total)} تومان</b></div>`);
   return `<div class=cprice-sum>${rows.join('')}</div>`;
 }
-function addC(pre){pre=pre||{};if(!S.customers.length||!unitOpts(pre.unit).length)return toast('ابتدا یک مشتری و یک واحد آزاد ثبت کنید');
- const firstUnit=pre.unit||(unitOpts('')[0]||[])[0]||'';
+function inlineDangConfirmHtml(parsedUnit){
+  if(parsedUnit?.mode!=='new'||!parsedUnit.draft?.dangSplit)return '';
+  const owners=parsedUnit.draft.owners||[];
+  const names=owners.map(o=>{
+    const c=cust(o.custId);
+    return `${esc(c.name||'—')} (${F(o.dang)} دانگ)`;
+  }).join('، ');
+  return `<p class=fd><span class="badge warn">تقسیط دانگی</span> ${F(dangSum(owners))} از ${F(DANG_MAX)} دانگ${names?` · ${names}`:''}${dangRemain(owners)>0?` · مانده آزاد ${F(dangRemain(owners))}`:''}</p>`;
+}
+function addC(pre){pre=pre||{};
+ if(pre.resId)return convertReservation(pre.resId);
+ if(!(S.projects||[]).length)return toast('ابتدا یک پروژه ثبت کنید');
+ const freeUnits=unitOpts(pre.unit);
+ const forceNewUnit=!freeUnits.length&&!pre.unit;
+ const firstUnit=pre.unit||(freeUnits[0]||[])[0]||'';
  const [fp,fu]=String(firstUnit).split('|');
- const startBase=pre.total!=null&&pre.total!==''?num(pre.total):unitSaleTotal(unitOf(fp,fu));
+ const startBase=pre.total!=null&&pre.total!==''?num(pre.total):(fp&&fu?unitSaleTotal(unitOf(fp,fu)):0);
+ const forceNew=!S.customers.length&&!pre.cust;
+ const firstProj=pre.proj||fp||((S.projects[0]||{}).id)||'';
+ UNIT_OWNERS_DRAFT={dangSplit:false,owners:[]};
  form('قرارداد جدید',[
   {k:'type',l:'نوع قرارداد',t:'select',o:Object.entries(TYPES).map(([k,v])=>[k,v.name])},
-  {k:'cust',l:'خریدار',t:'select',o:S.customers.map(c=>[c.id,c.name+' – '+c.nid])},
-  {k:'unit',l:'واحد',t:'select',o:unitOpts(pre.unit),on:(m,f)=>{if(f&&pre.total!=null&&pre.total!==''){syncContractPrice(m);return}const[a,b]=m.querySelector('[name=unit]').value.split('|');setM(m,'base',unitSaleTotal(unitOf(a,b)));syncContractPrice(m)}},
+  ...inlineCustFields({forceNew,custLabel:'خریدار'}),
+  ...inlineUnitFields({
+    forceNew:forceNewUnit,
+    preUnit:pre.unit,
+    unitOn:(m,f)=>{
+      if(m.querySelector('[name=newUnit]')?.checked)return;
+      if(f&&pre.total!=null&&pre.total!==''){syncContractPrice(m);return}
+      const[a,b]=(m.querySelector('[name=unit]')?.value||'').split('|');
+      if(a&&b){setM(m,'base',unitSaleTotal(unitOf(a,b)));syncContractPrice(m)}
+    }
+  }),
   {k:'date',l:'تاریخ قرارداد',d:todayJ(),r:1,j:1},
   {k:'base',l:'قیمت پایه واحد (تومان)',t:'money',r:1,on:(m)=>syncContractPrice(m)},
   {t:'html',html:contractPricePanelHtml()},
@@ -1259,34 +2151,59 @@ function addC(pre){pre=pre||{};if(!S.customers.length||!unitOpts(pre.unit).lengt
   {k:'step',l:'فاصله اقساط (ماه)',d:'1'},
   {k:'dur',l:'مدت قرارداد / تحویل (ماه)',d:'12'},
   {k:'note',l:'توضیحات',t:'area',w:1}
- ],{...pre,base:startBase,total:startBase,extraOn:false,profitOn:false,_boxClass:'box-wide'},v=>{
+ ],{...pre,base:startBase,total:startBase,extraOn:false,profitOn:false,newCust:forceNew,newUnit:forceNewUnit,projId:firstProj,_boxClass:'box-wide'},v=>{
+ const parsed=parseFormCust(v);if(!parsed)return false;
+ const parsedUnit=parseFormUnit(v);if(!parsedUnit)return false;
+ if(parsedUnit.mode==='sel'){
+   const u=unitOf(parsedUnit.projId,parsedUnit.unitId);
+   if(u.st&&u.st!=='free'&&!(pre.unit&&pre.unit===parsedUnit.projId+'|'+parsedUnit.unitId)){
+     toast('این واحد دیگر آزاد نیست');return false;
+   }
+ }
  const price=calcInstPrice(v.base,v.extraOn,v.profitOn);
  v.total=price.total;
  if(!(v.total>0)){toast('مبلغ نهایی قرارداد معتبر نیست');return false}
- const[pid,unit]=v.unit.split('|'),rest=Math.max(0,v.total-v.down),n=Math.max(0,parseInt(N(v.count))||0),step=Math.max(1,parseInt(N(v.step))||1),each=n?Math.floor(rest/n/1000)*1000:0,inst=[];
+ const rest=Math.max(0,v.total-v.down),n=Math.max(0,parseInt(N(v.count))||0),step=Math.max(1,parseInt(N(v.step))||1),each=n?Math.floor(rest/n/1000)*1000:0,inst=[];
  if(v.down){
-  const downPaid=!!pre.resId||!!v.ddate;
-  const downPdate=pre.rdate||v.ddate||'';
+  const downPaid=!!v.ddate;
+  const downPdate=v.ddate||'';
   inst.push({id:uid(),title:'پیش‌پرداخت',amt:v.down,date:v.date,paid:downPaid,pdate:downPaid?(downPdate||v.date):'',ref:'',lateDays:0,lateCalc:0,lateFee:0,lateNote:''});
  }
  for(let i=0;i<n;i++)inst.push({id:uid(),title:'قسط '+F(i+1),amt:i==n-1?rest-each*(n-1):each,date:addM(v.first,i*step),paid:false,pdate:'',ref:'',lateDays:0,lateCalc:0,lateFee:0,lateNote:''});
- askConfirm({title:'تأیید ثبت قرارداد',body:`<p>قرارداد برای <b>${esc(cust(v.cust).name)}</b> ثبت شود؟</p>${contractPriceSummaryHtml(price)}${v.down?`<p class=fd>پیش‌پرداخت ${money(v.down)}${v.ddate||pre.rdate?` · پرداخت‌شده در ${F(pre.rdate||v.ddate)}`:' · هنوز پرداخت‌نشده'}</p>`:''}${n?`<p class=fd>${F(n)} قسط از مانده ${money(rest)}</p>`:''}`},()=>{
+ const who=parsed.mode==='new'?parsed.cv.name:cust(parsed.id).name;
+ const unitLine=parsedUnit.mode==='new'
+   ?`${esc(parsedUnit.projName)} – واحد ${esc(parsedUnit.draft.no)}${parsedUnit.draft.block?' · بلوک '+esc(parsedUnit.draft.block):''} <span class="badge ok">واحد جدید</span>`
+   :esc(unitTxt(parsedUnit.projId,parsedUnit.unitId));
+ askConfirm({title:'تأیید ثبت قرارداد',body:`<p>قرارداد برای <b>${esc(who)}</b>${parsed.mode==='new'?' <span class="badge ok">مشتری جدید</span>':''} ثبت شود؟</p><p class=fd>واحد: ${unitLine}</p>${inlineDangConfirmHtml(parsedUnit)}${contractPriceSummaryHtml(price)}${v.down?`<p class=fd>پیش‌پرداخت ${money(v.down)}${v.ddate?` · پرداخت‌شده در ${F(v.ddate)}`:' · هنوز پرداخت‌نشده'}</p>`:''}${n?`<p class=fd>${F(n)} قسط از مانده ${money(rest)}</p>`:''}`},()=>{
+  const custId=commitFormCust(parsed);
+  const bound=commitFormUnit(parsedUnit,'sold');
+  if(!bound){toast('ثبت واحد انجام نشد');return false}
+  UNIT_OWNERS_DRAFT=null;
   S.contracts.push({
-    id:uid(),no:'ق-'+F(nextSeq('cn')),type:v.type,cust:v.cust,proj:pid,unit,date:v.date,
+    id:uid(),no:'ق-'+F(nextSeq('cn')),type:v.type,cust:custId,proj:bound.projId,unit:bound.unitId,date:v.date,
     total:v.total,baseTotal:price.base,
     extraOn:price.extraOn,extraPct:price.extraPct,extraAmt:price.extraAmt,
     profitOn:price.profitOn,profitPct:price.profitPct,profitAmt:price.profitAmt,
-    dur:v.dur,note:v.note,latePctDaily:num(v.latePctDaily),inst
+    dur:v.dur,note:v.note,latePctDaily:num(v.latePctDaily),resId:'',inst
   });
-  setSt(pid,unit,'sold');if(pre.resId){const r=S.reservations.find(x=>x.id==pre.resId);r.st='conv';r.pays.forEach(p=>p.s='used');lg(r,'تبدیل به قرارداد؛ وجوه پرداختی در قرارداد مصرف شد')}save();go('cont');toast('قرارداد ثبت شد');return true;
+  setSt(bound.projId,bound.unitId,'sold');
+  go('cont');
+  const bits=[];
+  if(parsed.mode==='new')bits.push('مشتری');
+  if(bound.created)bits.push('واحد');
+  if(parsedUnit.mode==='new'&&parsedUnit.draft.dangSplit)bits.push('تقسیط دانگی');
+  bits.push('قرارداد');
+  persistAfter(bits.join(' و ')+' ثبت شد');
+  return true;
  });return false})}
 function instCardHtml(c,i){
-  const d=diff(i.date),editing=INST_EDIT===i.id&&can('write')&&!i.paid;
-  const tone=i.paid?'ok':d<0?'bad':d<=7?'warn':'ok';
-  const label=i.paid?'پرداخت شد':d<0?F(-d)+' روز تأخیر':d==0?'سررسید امروز':F(d)+' روز مانده';
+  const paid=isInstPaid(i),partial=isInstPartial(i),rec=instReceived(i),remain=instRemain(i),pays=instPays(i);
+  const d=diff(i.date),editing=INST_EDIT===i.id&&can('write')&&!paid;
+  const tone=paid?'ok':partial?'warn':d<0?'bad':d<=7?'warn':'ok';
+  const label=paid?'پرداخت شد':partial?`مانده ${money(remain)}`:d<0?F(-d)+' روز تأخیر':d==0?'سررسید امروز':F(d)+' روز مانده';
   const pct=instLatePct(c,i),ownPct=i.latePctDaily!=null&&i.latePctDaily!=='';
-  const estDays=i.paid?(Number(i.lateDays)||0):Math.max(0,-d);
-  const estCalc=i.paid?(Number(i.lateCalc)||0):calcLateFee(i.amt,pct,estDays);
+  const estDays=paid?(Number(i.lateDays)||0):Math.max(0,-d);
+  const estCalc=paid?(Number(i.lateCalc)||0):calcLateFee(i.amt,pct,estDays);
   const fee=Number(i.lateFee)||0;
   if(editing){
     return `<article class="ic edit">
@@ -1303,25 +2220,27 @@ function instCardHtml(c,i){
       </div>
     </article>`;
   }
-  return `<article class="ic ${i.paid?'paid':d<0?'late':''}">
+  return `<article class="ic ${paid?'paid':partial?'partial':d<0?'late':''}">
     <header class=ic-head>
-      <div><b>${esc(i.title||'قسط')}</b>${i.kind==='lump'||(typeof isLumpInst==='function'&&isLumpInst(i))?' <span class="badge warn">الباقی</span>':''}<span class="badge ${tone}">${label}</span></div>
-      ${can('write')&&!i.paid?`<button class="icon-btn" title="ویرایش" onclick="startInstEdit('${i.id}')">✎</button>`:''}
+      <div><b>${esc(i.title||'قسط')}</b>${i.kind==='lump'||(typeof isLumpInst==='function'&&isLumpInst(i))?' <span class="badge warn">الباقی</span>':''}${i.fromPayId?' <span class="badge ok">از رزرو</span>':''}<span class="badge ${tone}">${label}</span></div>
+      ${can('write')&&!paid?`<button class="icon-btn" title="ویرایش" onclick="startInstEdit('${i.id}')">✎</button>`:''}
     </header>
     <div class=ic-facts>
       <div><span>مبلغ اصل</span><strong>${money(i.amt)} تومان</strong></div>
       <div><span>سررسید</span><strong>${F(i.date)}</strong></div>
-      ${i.paid?`<div><span>تاریخ پرداخت</span><strong>${F(i.pdate||'—')}</strong></div><div><span>پیگیری</span><strong>${F(i.ref||'—')}</strong></div>`:''}
+      ${rec?`<div><span>پرداخت‌شده</span><strong class=ok-txt>${money(rec)} تومان</strong></div><div><span>مانده قسط</span><strong>${paid?'۰':money(remain)} تومان</strong></div>`:''}
+      ${pays.length?`<div class=span2><span>فیش‌ها</span><strong>${pays.map(p=>payLineHtml(p,c)).join('<br>')}</strong></div>`:''}
+      ${i.fromPayId&&i.payer?`<div class=span2><span>پرداخت‌کننده رزرو</span><strong>${esc(i.payer)}${i.acct?' · '+F(i.acct):''}</strong></div>`:''}
       ${pct?`<div><span>نرخ جریمه</span><strong>${F(pct)}٪ روزانه${ownPct?'':' (قرارداد)'}</strong></div>`:''}
-      ${!i.paid&&estDays>0&&pct?`<div><span>تخمین جریمه تا امروز</span><strong>${money(estCalc)} تومان</strong></div><div><span>جزئیات</span><strong>${F(estDays)} روز × ${F(pct)}٪ × ${money(i.amt)}</strong></div>`:''}
-      ${i.paid&&(fee||estDays)?`<div><span>جریمه اعمال‌شده</span><strong>${money(fee)} تومان</strong></div><div><span>قابل پرداخت</span><strong>${money(i.amt+fee)} تومان</strong></div>`:''}
+      ${!paid&&estDays>0&&pct?`<div><span>تخمین جریمه تا امروز</span><strong>${money(estCalc)} تومان</strong></div><div><span>جزئیات</span><strong>${F(estDays)} روز × ${F(pct)}٪ × ${money(i.amt)}</strong></div>`:''}
+      ${paid&&(fee||estDays)?`<div><span>جریمه اعمال‌شده</span><strong>${money(fee)} تومان</strong></div><div><span>قابل پرداخت</span><strong>${money(i.amt+fee)} تومان</strong></div>`:''}
     </div>
-    ${i.paid&&(fee||i.lateNote||estDays)?`<p class="fd late-doc">${esc(lateDocLine({...i,_latePctUsed:pct}))}</p>`:''}
+    ${paid&&(fee||i.lateNote||estDays)?`<p class="fd late-doc">${esc(lateDocLine({...i,_latePctUsed:pct}))}</p>`:''}
     <div class=ic-actions>
-      ${i.paid?`<button class=sm onclick="openRc('${c.id}','${i.id}')">رسید</button>${can('write')?`<button class=sm onclick="editPay('${i.id}')">ویرایش پرداخت</button><button class=sm onclick="unpay('${i.id}')">لغو پرداخت</button>`:''}`:
-        `${can('write')?`<button class="sm pri" onclick="pay('${i.id}')">ثبت پرداخت</button>`:''}
+      ${paid?`<button class=sm onclick="openRc('${c.id}','${i.id}')">رسید</button>${can('write')?`<button class=sm onclick="editPay('${i.id}')">ویرایش پرداخت</button><button class=sm onclick="unpay('${i.id}')">لغو پرداخت</button>`:''}`:
+        `${can('write')?`<button class="sm pri" onclick="pay('${i.id}')">${partial?'ادامه پرداخت':'ثبت پرداخت'}</button>${partial?`<button class=sm onclick="editPay('${i.id}')">ویرایش فیش‌ها</button>`:''}`:''}
          ${canRefer()&&d<0?`<button class=sm onclick="referInst('${c.id}','${i.id}')">ارجاع</button>`:''}
-         ${can('write')?`<button class="sm btn-ghost danger" onclick="delI('${i.id}')">حذف</button>`:''}`}
+         ${can('write')&&!partial?`<button class="sm btn-ghost danger" onclick="delI('${i.id}')">حذف</button>`:''}`}
     </div>
   </article>`;
 }
@@ -1329,7 +2248,7 @@ function cd(){
   const c=S.contracts.find(x=>x.id==V.id);if(!c)return cont();
   if(INST_EDIT&&!(c.inst||[]).some(i=>i.id===INST_EDIT))INST_EDIT=null;
   const cu=cust(c.cust),p=paidSum(c),fees=lateSum(c),all=sum(c.inst||[],i=>i.amt),rem=Math.max(0,c.total-p),pct=c.total>0?Math.min(100,Math.round(p/c.total*100)):0;
-  const unpaid=(c.inst||[]).filter(i=>!i.paid),late=unpaid.filter(i=>diff(i.date)<0);
+  const ist=instStats(c),unpaid=(c.inst||[]).filter(i=>!isInstPaid(i)),late=unpaid.filter(i=>diff(i.date)<0);
   const st=contStatus(c),chip=st.k==='bad'?'late':!unpaid.length?'paid':'next';
   const av=(cu.name||'؟').trim().charAt(0);
   const pr=proj(c.proj),u=unitOf(c.proj,c.unit);
@@ -1363,6 +2282,7 @@ function cd(){
           <span class="chip ${chip}">${esc(st.l)}</span>
         </div>
         <p class=dossier-addr>${esc(typeName(c.type))} · از ${F(c.date)}${c.dur?` · ${F(c.dur)} ماهه`:''}</p>
+        ${c.resId?(()=>{const rr=S.reservations.find(x=>x.id===c.resId);return rr?`<p class=dossier-note>تبدیل‌شده از رزرو <button class="sm btn-soft" onclick="go('rd','${rr.id}')">${esc(rr.no)}</button></p>`:'<p class=dossier-note>تبدیل‌شده از رزرو (حذف‌شده)</p>';})():''}
         ${c.note?`<p class=dossier-note>${esc(c.note)}</p>`:''}
         ${c.type==='lease'&&typeof leaseMissing==='function'&&leaseMissing(c).length?`<p class=warn-line>برای چاپ رسمی هنوز کامل نیست: ${esc(leaseMissing(c).join('، '))}</p>`:''}
         ${c.type==='invest'&&typeof investMissing==='function'&&investMissing(c).length?`<p class=warn-line>برای چاپ رسمی هنوز کامل نیست: ${esc(investMissing(c).join('، '))}</p>`:''}
@@ -1378,6 +2298,7 @@ function cd(){
       </div>
       <div class=pay-meter role=progressbar aria-valuemin=0 aria-valuemax=100 aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
       <div class=pnote>${F(pct)}٪ از مبلغ قرارداد پرداخت شده است${fees?` · جریمه دیرکرد وصول‌شده ${money(fees)} تومان`:''}</div>
+      <div class=inst-stat-bar>اقساط پرداخت‌شده <b>${F(ist.paid)}</b> از <b>${F(ist.total)}</b> · باقی‌مانده <b>${F(ist.unpaid+ist.partial)}</b></div>
       ${(c.extraOn||c.profitOn||num(c.baseTotal))?`<div class=cprice-sum style="margin-top:10px">
         <div><span>قیمت پایه</span><b>${money(c.baseTotal||c.total)} تومان</b></div>
         ${c.extraOn?`<div><span>هزینه مازاد ${F(c.extraPct||INST_EXTRA_PCT)}٪</span><b>+ ${money(c.extraAmt||0)} تومان</b></div>`:''}
@@ -1409,7 +2330,7 @@ function cd(){
         <dl class=fig>
           ${fig('پروژه',esc(pr?.name||'—'))}
           ${fig('واحد',esc(u.no||'—')+(u.area?` · ${F(u.area)} م²`:''))}
-          ${fig('اقساط باقی‌مانده',F(unpaid.length))}
+          ${fig('اقساط',`<b>${F(ist.paid)}</b> پرداخت‌شده از ${F(ist.total)} · باقی ${F(ist.unpaid+ist.partial)}`)}
           ${fig('اقساط معوق',late.length?`<span class="chip late">${F(late.length)}</span>`:F(0))}
         </dl>
       </section>
@@ -1448,122 +2369,291 @@ function saveInstEdit(id){
     if(lateRaw==='')delete i.latePctDaily;else i.latePctDaily=num(lateRaw);
     if(lump){i.title=/الباقی|نقدی/.test(title)?title:'الباقی نقدی'}
     else{i.title=title==='الباقی نقدی'?'قسط':title}
-    if(c.auto!==false&&!i.paid&&!lump)redist(c,i);
+    if(c.auto!==false&&!isInstPaid(i)&&!lump)redist(c,i);
     c.inst.sort((a,b)=>a.date<b.date?-1:1);
     if(c.ed)delete c.ed.c;
     INST_EDIT=null;save();render();toast('قسط ذخیره شد');return true;
   });
 }
-function setI(id,k,v){const pair=gi(id);if(!pair)return;const[c,i]=pair;if(k=='amt'){i.amt=num(v);if(c.auto!==false&&!i.paid)redist(c,i)}else if(k=='date'){const d=normJ(v);if(!d)return toast('تاریخ معتبر نیست');i.date=d}else i.title=v;c.inst.sort((a,b)=>a.date<b.date?-1:1);save();render()}
+function setI(id,k,v){const pair=gi(id);if(!pair)return;const[c,i]=pair;if(k=='amt'){i.amt=num(v);if(c.auto!==false&&!isInstPaid(i))redist(c,i)}else if(k=='date'){const d=normJ(v);if(!d)return toast('تاریخ معتبر نیست');i.date=d}else i.title=v;c.inst.sort((a,b)=>a.date<b.date?-1:1);save();render()}
 function openPayModal(id,opts){
   opts=opts||{};
   const pair=gi(id);if(!pair)return;const[c,i]=pair;
   const pct=instLatePct(c,i);
   const m=$('#modal');
-  const initDate=opts.pdate||i.pdate||todayJ();
-  const initRef=opts.ref!=null?opts.ref:(i.ref||'');
-  const initNote=opts.note!=null?opts.note:(i.lateNote||'');
-  const paint=()=>{
-    const pEl=m.querySelector('[name=pdate]'),rEl=m.querySelector('[name=ref]'),fEl=m.querySelector('[name=lateFee]'),nEl=m.querySelector('[name=lateNote]');
-    const pdate=normJ(pEl?.value||'')||todayJ();
-    const days=Math.max(0,daysBetween(i.date,pdate));
-    const calc=calcLateFee(i.amt,pct,days);
-    if(fEl&&fEl.dataset.touched!=='1'){fEl.value=calc?F(calc.toLocaleString('en')):'0'}
-    const fee=num(fEl?.value);
-    const sumPay=i.amt+fee;
-    const hint=m.querySelector('#lateHint');
-    if(hint)hint.innerHTML=days>0
-      ?`تأخیر <b>${F(days)}</b> روز از سررسید ${F(i.date)} · نرخ <b>${F(pct)}٪</b> روزانه · محاسبه سیستم: <b>${money(calc)}</b> تومان${fee!==calc?` · اعمال فعلی: <b>${money(fee)}</b> تومان`:''}`
-      :`بدون تأخیر؛ جریمه صفر است (در صورت نیاز می‌توانید دستی مقدار بگذارید).`;
-    const tot=m.querySelector('#payTotal');
-    if(tot)tot.innerHTML=`اصل قسط <b>${money(i.amt)}</b> + جریمه <b>${money(fee)}</b> = <b>${money(sumPay)}</b> تومان`;
+  const seed=()=>{
+    if(Array.isArray(i.pays)&&i.pays.length){
+      return i.pays.map(p=>{
+        const overFrom=payOverFrom(p);
+        return{
+          id:p.id||uid(),
+          amt:num(p.amt),
+          date:p.date||todayJ(),
+          ref:overFrom?'':(p.ref||''),
+          overFrom,
+          note:payNoteLabel(p,c)
+        };
+      });
+    }
+    if(i.paid)return[{id:uid(),amt:num(i.amt),date:i.pdate||i.date||todayJ(),ref:i.ref||'',overFrom:'',note:''}];
+    return[];
   };
-  m.innerHTML=`<div class=box><h3 style="margin-top:0">${opts.edit?'ویرایش پرداخت':'ثبت پرداخت'}</h3>
-    <p class=fd>${esc(i.title||'قسط')} · اصل ${money(i.amt)} تومان · سررسید ${F(i.date)}</p>
-    <div class=grid>
-      <label>تاریخ پرداخت<input name=pdate readonly style="cursor:pointer"></label>
-      <label>شماره پیگیری<input name=ref></label>
-      <label>جریمه نهایی (تومان)<input name=lateFee inputmode=numeric></label>
-      <label class=w>یادداشت تعدیل / لغو جریمه<textarea name=lateNote rows=2 placeholder="اگر جریمه را کمتر یا صفر کردید، دلیل را بنویسید"></textarea></label>
+  let rows=seed();
+  if(!opts.edit||!rows.length){
+    const got=sum(rows,p=>num(p.amt));
+    const rem=Math.max(0,num(i.amt)-got);
+    rows=rows.concat([{id:uid(),amt:rem||num(i.amt),date:todayJ(),ref:'',overFrom:'',note:''}]);
+  }
+  const readRows=()=>[...m.querySelectorAll('.ipay-row')].map(row=>{
+    const id=row.dataset.id||uid();
+    const overFrom=row.dataset.overFrom||'';
+    const amt=num(row.querySelector('[data-k=amt]')?.value);
+    const date=normJ(row.querySelector('[data-k=date]')?.value||'')||'';
+    const ref=overFrom?'':(row.querySelector('[data-k=ref]')?.value||'').trim();
+    let note=(row.querySelector('[data-k=note]')?.value||'').trim();
+    if(note.startsWith('overpay:'))note=payNoteLabel({note,overFrom,amt},c);
+    if(overFrom&&(!note||note.startsWith('overpay:'))){
+      const src=(c.inst||[]).find(x=>x.id===overFrom);
+      note=overpayText(amt,src?.title||'قسط');
+    }
+    return{id,amt,date,ref,note,overFrom};
+  });
+  const rowHtml=p=>{
+    const over=!!p.overFrom;
+    return `<div class=ipay-row data-id="${esc(p.id)}" data-over-from="${esc(p.overFrom||'')}">
+    <div class=ipay-main>
+      <label>مبلغ<input data-k=amt inputmode=numeric value="${esc(p.amt?money(p.amt):'')}" placeholder="۰" ${over?'readonly':''}></label>
+      <label>تاریخ<input data-k=date readonly style="cursor:pointer" value="${F(p.date||todayJ())}"></label>
+      <label>شماره پیگیری<input data-k=ref value="${esc(over?'':(p.ref||''))}" placeholder="${over?'— کسر مازاد —':'فیش / پیگیری'}" ${over?'readonly':''}></label>
+      <button type=button class="icon-btn ipay-del" title="حذف این پرداخت" aria-label="حذف">×</button>
+    </div>
+    <label class=ipay-note>یادداشت<input data-k=note value="${esc(p.note||'')}" placeholder="اختیاری" ${over?'readonly':''}></label>
+  </div>`;
+  };
+  const paint=()=>{
+    const cur=readRows();
+    const received=Math.round(sum(cur,p=>num(p.amt)));
+    const remain=Math.max(0,num(i.amt)-received);
+    const excess=Math.max(0,received-num(i.amt));
+    const over=excess>0?previewInstOverpay(c,i,excess):{excess:0,applied:0,left:0,cuts:[]};
+    const done=remain<=0&&received>0;
+    const lastDate=cur.filter(p=>p.date).map(p=>p.date).sort().pop()||todayJ();
+    const days=Math.max(0,daysBetween(i.date,lastDate));
+    const calc=calcLateFee(i.amt,pct,days);
+    const fEl=m.querySelector('[name=lateFee]'),nEl=m.querySelector('[name=lateNote]');
+    const lateBox=m.querySelector('#lateBox');
+    if(lateBox)lateBox.hidden=!done;
+    if(done&&fEl&&fEl.dataset.touched!=='1')fEl.value=calc?F(calc.toLocaleString('en')):'0';
+    const fee=done?num(fEl?.value):0;
+    const sumEl=m.querySelector('#paySum');
+    if(sumEl)sumEl.innerHTML=`
+      <div><span>اصل قسط</span><b>${money(i.amt)}</b></div>
+      <div><span>جمع فیش‌ها</span><b class=ok-txt>${money(received)}</b></div>
+      <div class="${remain?'is-rem':''}"><span>مانده قسط</span><b>${money(remain)}</b></div>
+      ${excess?`<div class=is-over><span>مازاد</span><b>${money(excess)}</b></div>`:''}
+      ${done?`<div><span>جریمه</span><b>${money(fee)}</b></div>`:''}
+      ${excess?`<div class="ipay-over-msg w">${over.applied
+        ?`مازاد <b>${money(over.applied)}</b> تومان ÷ <b>${F(over.count)}</b> قسط باقی‌مانده ≈ <b>${money(over.each)}</b> به هر قسط${over.left?` · باقیمانده تقسیم‌نشده: ${money(over.left)}`:''}`
+        :`مازاد <b>${money(excess)}</b> تومان است اما قسط باز بعدی برای تقسیم وجود ندارد.`}</div>`:''}`;
+    const hint=m.querySelector('#lateHint');
+    if(hint){
+      if(!done)hint.innerHTML=remain>0
+        ?`هنوز <b>${money(remain)}</b> تومان از این قسط باقی است. می‌توانید با دکمه <b>+</b> چند فیش جدا ثبت کنید.`
+        :`مبلغی برای پرداخت وارد کنید.`;
+      else if(excess)hint.innerHTML=`تسویه کامل با اضافه‌پرداخت · مازاد <b>${money(excess)}</b> به‌صورت مساوی بین <b>${F(over.count||0)}</b> قسط باقی‌مانده تقسیم می‌شود.`+(days>0?` · تأخیر <b>${F(days)}</b> روز · جریمه محاسبه‌شده <b>${money(calc)}</b>`:'');
+      else hint.innerHTML=days>0
+        ?`تسویه کامل · تأخیر <b>${F(days)}</b> روز از ${F(i.date)} · نرخ <b>${F(pct)}٪</b> · محاسبه: <b>${money(calc)}</b>${fee!==calc?` · اعمال: <b>${money(fee)}</b>`:''}`
+        :`تسویه کامل بدون تأخیر؛ جریمه صفر است (در صورت نیاز دستی وارد کنید).`;
+    }
+    const ok=m.querySelector('#ok');
+    if(ok)ok.textContent=opts.edit?'ذخیره تغییرات':(done?(excess?'ثبت تسویه + اضافه‌پرداخت':'ثبت و تسویه قسط'):(received>0?'ثبت پرداخت جزئی':'ثبت پرداخت'));
+  };
+  const bindRows=()=>{
+    m.querySelectorAll('.ipay-row').forEach(row=>{
+      const amt=row.querySelector('[data-k=amt]');
+      const date=row.querySelector('[data-k=date]');
+      const ref=row.querySelector('[data-k=ref]');
+      const note=row.querySelector('[data-k=note]');
+      const del=row.querySelector('.ipay-del');
+      if(amt){amt.oninput=()=>{fmtIn(amt);paint()}}
+      if(date)date.onclick=()=>dpick(date,()=>{m.querySelector('[name=lateFee]')&&(m.querySelector('[name=lateFee]').dataset.touched='');paint()});
+      if(ref)ref.oninput=paint;
+      if(note)note.oninput=paint;
+      if(del)del.onclick=()=>{
+        const list=m.querySelector('#payRows');
+        if(list.querySelectorAll('.ipay-row').length<=1){
+          amt.value='';ref.value='';note.value='';paint();return;
+        }
+        row.remove();paint();
+      };
+    });
+  };
+  m.innerHTML=`<div class="box box-wide pay-modal">
+    <h3 style="margin-top:0">${opts.edit?'ویرایش پرداخت‌های قسط':'ثبت پرداخت قسط'}</h3>
+    <p class=fd>${esc(i.title||'قسط')} · اصل <b>${money(i.amt)}</b> تومان · سررسید ${F(i.date)}</p>
+    <div class=ipay-sum id=paySum></div>
+    <div class=ipay-head>
+      <h4>فیش‌ها و پرداخت‌ها</h4>
+      <button type=button class="sm btn-soft" id=addPayRow><span class=plus>+</span> پرداخت دیگر</button>
+    </div>
+    <div id=payRows class=ipay-list>${rows.map(rowHtml).join('')}</div>
+    <div id=lateBox class=ipay-late hidden>
+      <div class=grid>
+        <label>جریمه نهایی (تومان)<input name=lateFee inputmode=numeric></label>
+        <label class=w>یادداشت تعدیل / لغو جریمه<textarea name=lateNote rows=2 placeholder="اگر جریمه را کمتر یا صفر کردید، دلیل را بنویسید">${esc(i.lateNote||'')}</textarea></label>
+      </div>
+      <div class=act style="margin-top:8px">
+        <button type=button class=sm data-act=resetLate>بازنشانی جریمه به محاسبه</button>
+        <button type=button class=sm data-act=waiveLate>بدون جریمه</button>
+      </div>
     </div>
     <p class=fd id=lateHint></p>
-    <p id=payTotal style="margin:8px 0 0"></p>
     <div class=act style="margin-top:12px">
-      <button type=button class=sm data-act=resetLate>بازنشانی جریمه به محاسبه</button>
-      <button type=button class=sm data-act=waiveLate>بدون جریمه</button>
-      <button type=button class=pri id=ok>${opts.edit?'ذخیره تغییرات':'ثبت پرداخت'}</button>
+      <button type=button class=pri id=ok>ثبت پرداخت</button>
       <button type=button onclick="closeM()">انصراف</button>
     </div>
   </div>`;
   m.classList.add('on');
-  const pEl=m.querySelector('[name=pdate]'),rEl=m.querySelector('[name=ref]'),fEl=m.querySelector('[name=lateFee]'),nEl=m.querySelector('[name=lateNote]');
-  pEl.value=F(initDate);rEl.value=initRef;nEl.value=initNote;
-  const days0=Math.max(0,daysBetween(i.date,initDate));
+  const fEl=m.querySelector('[name=lateFee]');
+  const days0=Math.max(0,daysBetween(i.date,i.pdate||todayJ()));
   const calc0=calcLateFee(i.amt,pct,days0);
-  const initFee=opts.fee!=null?opts.fee:(opts.edit?(Number(i.lateFee)||0):calc0);
-  fEl.value=initFee?F(Math.round(initFee).toLocaleString('en')):'0';
-  if(opts.edit&&(Number(i.lateFee)||0)!==(Number(i.lateCalc)||0))fEl.dataset.touched='1';
-  pEl.onclick=()=>dpick(pEl,()=>{fEl.dataset.touched='';paint()});
-  fEl.oninput=()=>{fEl.dataset.touched='1';fmtIn(fEl);paint()};
-  paint();
-  $('#ok').onclick=async()=>{
-    const pdate=normJ(pEl.value);if(!pdate)return toast('تاریخ پرداخت معتبر نیست');
-    const ref=rEl.value.trim();
-    if(!assertPayRef(ref,{kind:'inst',id:i.id}))return;
-    const days=Math.max(0,daysBetween(i.date,pdate));
+  const initFee=opts.fee!=null?opts.fee:(opts.edit||isInstPaid(i)?(Number(i.lateFee)||0):calc0);
+  if(fEl){
+    fEl.value=initFee?F(Math.round(initFee).toLocaleString('en')):'0';
+    if((opts.edit||isInstPaid(i))&&(Number(i.lateFee)||0)!==(Number(i.lateCalc)||0))fEl.dataset.touched='1';
+    fEl.oninput=()=>{fEl.dataset.touched='1';fmtIn(fEl);paint()};
+  }
+  m.querySelector('#addPayRow').onclick=()=>{
+    const cur=readRows();
+    const rem=Math.max(0,num(i.amt)-sum(cur,p=>num(p.amt)));
+    m.querySelector('#payRows').insertAdjacentHTML('beforeend',rowHtml({id:uid(),amt:rem,date:todayJ(),ref:'',note:''}));
+    bindRows();paint();
+    const last=m.querySelector('.ipay-row:last-child [data-k=amt]');
+    if(last){last.focus();last.select?.()}
+  };
+  m.querySelector('[data-act=resetLate]')?.addEventListener('click',()=>{if(fEl){fEl.dataset.touched='';paint()}});
+  m.querySelector('[data-act=waiveLate]')?.addEventListener('click',()=>{if(fEl){fEl.dataset.touched='1';fEl.value='0';paint()}});
+  bindRows();paint();
+  $('#ok').onclick=()=>{
+    const cur=readRows().filter(p=>num(p.amt)>0);
+    if(!cur.length)return toast('حداقل یک پرداخت با مبلغ وارد کنید');
+    for(const p of cur){
+      if(!p.date)return toast('تاریخ همه پرداخت‌ها را وارد کنید');
+    }
+    const seen=new Set();
+    for(const p of cur){
+      const k=refKey(p.ref);
+      if(k){
+        if(seen.has(k))return toast(`شماره پیگیری «${F(p.ref)}» در همین قسط تکراری است`);
+        seen.add(k);
+      }
+      if(!assertPayRef(p.ref,{kind:'inst',id:i.id}))return;
+    }
+    const received=Math.round(sum(cur,p=>num(p.amt)));
+    const remain=Math.max(0,num(i.amt)-received);
+    const excess=Math.max(0,received-num(i.amt));
+    const overPrev=excess>0?previewInstOverpay(c,i,excess):{excess:0,applied:0,left:0,cuts:[]};
+    const done=remain<=0;
+    const lastDate=cur.map(p=>p.date).sort().pop();
+    const days=Math.max(0,daysBetween(i.date,lastDate));
     const calc=calcLateFee(i.amt,pct,days);
-    const fee=num(fEl.value);
-    const note=(nEl.value||'').trim();
-    if(fee!==calc&&!note)return toast('چون مبلغ جریمه با محاسبه سیستم تفاوت دارد، یادداشت دلیل را بنویسید');
-    askConfirm({title:opts.edit?'تأیید ویرایش پرداخت':'تأیید ثبت پرداخت',body:`<p>${esc(i.title||'قسط')} ثبت شود؟</p><div class=confirm-summary><p>تاریخ پرداخت: <b>${F(pdate)}</b>${ref?' · پیگیری '+F(ref):''}</p><p>اصل: <b>${money(i.amt)}</b> · جریمه: <b>${money(fee)}</b>${fee!==calc?` (محاسبه ${money(calc)})`:''}</p><p>جمع قابل پرداخت: <b>${money(i.amt+fee)}</b></p>${note?`<p class=fd>${esc(note)}</p>`:''}</div>`},()=>{
-      i.paid=true;i.pdate=pdate;i.ref=ref;i.lateDays=days;i.lateCalc=calc;i.lateFee=fee;i.lateNote=note;
-      save();render();toast(opts.edit?'پرداخت به‌روز شد':'پرداخت ثبت شد');return true;
+    const fee=done?num(fEl?.value):0;
+    const note=done?((m.querySelector('[name=lateNote]')?.value||'').trim()):'';
+    if(done&&fee!==calc&&!note)return toast('چون مبلغ جریمه با محاسبه سیستم تفاوت دارد، یادداشت دلیل را بنویسید');
+    const lines=cur.map((p,idx)=>{
+      const over=!!p.overFrom||String(p.note||'').startsWith('overpay:');
+      const nl=payNoteLabel(p,c);
+      return `<li>${F(idx+1)}) ${money(p.amt)} تومان · ${F(p.date)}${!over&&p.ref?` · ${F(p.ref)}`:''}${nl?` · ${esc(nl)}`:''}</li>`;
+    }).join('');
+    const overLines=overPrev.cuts.map(x=>`<li>«${esc(x.title)}»: +${money(x.cut)} از مازاد${x.remain?` · مانده ${money(x.remain)}`:` · تسویه`}</li>`).join('');
+    askConfirm({
+      title:opts.edit?'تأیید ویرایش پرداخت':(done?(excess?'تأیید تسویه + اضافه‌پرداخت':'تأیید تسویه قسط'):'تأیید پرداخت جزئی'),
+      body:`<p>${esc(i.title||'قسط')} · اصل <b>${money(i.amt)}</b></p>
+        <ul class=confirm-list>${lines}</ul>
+        <div class=confirm-summary>
+          <p>جمع فیش‌ها: <b>${money(received)}</b> · مانده قسط: <b>${money(remain)}</b>${excess?` · مازاد: <b>${money(excess)}</b>`:''}</p>
+          ${excess?`<p>مازاد <b>${money(overPrev.applied)}</b> تومان به‌صورت مساوی بین <b>${F(overPrev.count)}</b> قسط باقی‌مانده تقسیم می‌شود${overPrev.each?` (حدود <b>${money(overPrev.each)}</b> برای هر قسط)`:''}.</p>
+            ${overLines?`<ul class=confirm-list>${overLines}</ul>`:'<p class=fd>قسط باز بعدی برای تقسیم مازاد یافت نشد.</p>'}
+            ${overPrev.left?`<p class=fd>مبلغ ${money(overPrev.left)} بیش از جمع مانده اقساط بود و اعمال نشد.</p>`:''}`:''}
+          ${done?`<p>جریمه: <b>${money(fee)}</b>${fee!==calc?` (محاسبه ${money(calc)})`:''} · جمع اصل+جریمه: <b>${money(i.amt+fee)}</b></p>`:`<p class=fd>قسط هنوز کامل نشده؛ می‌توانید بعداً با فیش‌های دیگر مانده را ببندید.</p>`}
+          ${note?`<p class=fd>${esc(note)}</p>`:''}
+        </div>`
+    },()=>{
+      i.pays=cur.map(p=>({
+        id:p.id||uid(),
+        amt:num(p.amt),
+        date:p.date,
+        ref:p.overFrom?'':(p.ref||''),
+        note:p.note||'',
+        overFrom:p.overFrom||''
+      }));
+      syncInstPaid(i);
+      if(done){i.lateDays=days;i.lateCalc=calc;i.lateFee=fee;i.lateNote=note}
+      else clearLateFields(i);
+      const over=applyInstOverpay(c,i,excess,{date:lastDate,ref:cur.map(p=>p.ref).filter(Boolean).slice(-1)[0]||''});
+      render();
+      persistAfter(done
+        ?(excess?`قسط تسویه شد · مازاد ${money(over.applied)} بین ${F(over.count)} قسط باقی‌مانده تقسیم شد`:(opts.edit?'پرداخت به‌روز شد':'قسط تسویه شد'))
+        :`پرداخت جزئی ثبت شد · مانده ${money(remain)}`);
+      return true;
     });
   };
-  m.querySelector('[data-act=resetLate]').onclick=()=>{fEl.dataset.touched='';paint()};
-  m.querySelector('[data-act=waiveLate]').onclick=()=>{fEl.dataset.touched='1';fEl.value='0';paint()};
 }
 const pay=id=>openPayModal(id);
 const editPay=id=>openPayModal(id,{edit:true});
-const unpay=id=>{askConfirm({title:'لغو پرداخت',body:'وضعیت این قسط به پرداخت‌نشده برگردد و جریمه ثبت‌شده پاک شود؟',okLabel:'بله، لغو شود',danger:true},()=>{const pair=gi(id);if(!pair)return false;pair[1].paid=false;pair[1].pdate='';pair[1].ref='';clearLateFields(pair[1]);save();render();return true})};
-const delI=id=>{const pair=gi(id);if(!pair)return;askConfirm({title:'حذف قسط',body:`<p>ردیف «${esc(pair[1].title||'قسط')}» حذف شود؟</p>`,okLabel:'بله، حذف شود',danger:true},()=>{pair[0].inst=pair[0].inst.filter(i=>i.id!=id);if(INST_EDIT===id)INST_EDIT=null;save();render();return true})};
-const addI=cid=>{const c=S.contracts.find(x=>x.id==cid);if(!c)return;c.inst.push({id:uid(),title:'ردیف جدید',amt:0,date:todayJ(),paid:false,pdate:'',ref:'',lateDays:0,lateCalc:0,lateFee:0,lateNote:''});INST_EDIT=c.inst[c.inst.length-1].id;save();render()};
+const unpay=id=>{askConfirm({title:'لغو پرداخت',body:'همه فیش‌های این قسط پاک شود و اعتبار اضافه‌پرداخت روی اقساط بعدی هم برداشته شود؟',okLabel:'بله، لغو شود',danger:true},()=>{const pair=gi(id);if(!pair)return false;const[c,i]=pair;stripOverpayCredits(c,i.id);i.pays=[];i.paid=false;i.pdate='';i.ref='';clearLateFields(i);save();render();return true})};
+const delI=id=>{const pair=gi(id);if(!pair)return;if(isInstPartial(pair[1])||isInstPaid(pair[1]))return toast('اول پرداخت‌های این قسط را لغو کنید');askConfirm({title:'حذف قسط',body:`<p>ردیف «${esc(pair[1].title||'قسط')}» حذف شود؟</p>`,okLabel:'بله، حذف شود',danger:true},()=>{pair[0].inst=pair[0].inst.filter(i=>i.id!=id);if(INST_EDIT===id)INST_EDIT=null;save();render();return true})};
+const addI=cid=>{const c=S.contracts.find(x=>x.id==cid);if(!c)return;c.inst.push({id:uid(),title:'ردیف جدید',amt:0,date:todayJ(),paid:false,pdate:'',ref:'',pays:[],lateDays:0,lateCalc:0,lateFee:0,lateNote:''});INST_EDIT=c.inst[c.inst.length-1].id;save();render()};
+function restoreReservationAfterContract(c){
+  if(!c?.resId)return null;
+  const r=S.reservations.find(x=>x.id===c.resId);
+  if(!r||r.st!=='conv')return null;
+  r.st='active';
+  (r.pays||[]).forEach(p=>{if(p.s==='used')p.s='ok'});
+  lg(r,`بازگشت از حذف قرارداد ${c.no}؛ رزرو دوباره فعال شد`);
+  return r;
+}
 function delC(id){
   if(!canDeleteRec())return toast('اجازه حذف ندارید');
   const c=S.contracts.find(x=>x.id==id);if(!c)return;
   const caseN=[...WORK,...LEGAL].filter((x,i,a)=>x.contract?.id===id&&a.findIndex(y=>y.id===x.id)===i).length;
+  const linkedRes=c.resId?S.reservations.find(x=>x.id===c.resId):null;
   askConfirm({
     title:'حذف کامل قرارداد',
-    body:`<p>قرارداد <b>${esc(c.no)}</b> مربوط به <b>${esc(cust(c.cust).name)}</b> حذف شود و واحد آزاد گردد؟</p>${delSummary([
+    body:`<p>قرارداد <b>${esc(c.no)}</b> مربوط به <b>${esc(cust(c.cust).name)}</b> حذف شود؟</p>${delSummary([
       {n:(c.inst||[]).length,l:'قسط'},
       {n:caseN,l:'ارجاع سازمانی / حقوقی'},
-      {n:1,l:'بازگشت واحد به آزاد'},
+      {n:linkedRes?1:0,l:linkedRes?`بازگشت رزرو ${linkedRes.no} به فعال و واحد به رزرو`:'بازگشت واحد به آزاد'},
     ])}`,
     okLabel:'بله، حذف کامل',
     danger:true,
   },async()=>{
+    const restored=restoreReservationAfterContract(c);
     removeContractCore(c);
+    if(restored)setSt(restored.proj,restored.unit,'res');
     await purgeLinkedCases({contractIds:[id]});
-    save();go('cont');toast('قرارداد حذف شد');return true;
+    go('cont');persistAfter(restored?'قرارداد حذف و رزرو دوباره فعال شد':'قرارداد حذف شد');return true;
   });
 }
 function delR(id){
   if(!canDeleteRec())return toast('اجازه حذف ندارید');
   const r=S.reservations.find(x=>x.id==id);if(!r)return;
+  const linked=contractByRes(r.id);
   askConfirm({
     title:'حذف کامل رزرو',
     body:`<p>رزرو <b>${esc(r.no)}</b> برای <b>${esc(cust(r.cust).name)}</b> حذف شود؟</p>${delSummary([
       {n:(r.pays||[]).length,l:'پرداخت رزرو'},
       {n:(r.st==='active'||r.st==='cancelling')?1:0,l:'آزاد شدن واحد'},
+      {n:linked?1:0,l:linked?`قطع لینک از قرارداد ${linked.no}`:''},
     ])}`,
     okLabel:'بله، حذف کامل',
     danger:true,
   },async()=>{
+    if(linked)linked.resId='';
     removeReservationCore(r);
     await purgeLinkedCases({reservationIds:[id]});
-    save();
     if(V.n==='rd')go('res');else render();
-    toast('رزرو حذف شد');return true;
+    persistAfter(linked?'رزرو حذف و لینک قرارداد قطع شد':'رزرو حذف شد');return true;
   });
 }
 function delLead(id){
@@ -1605,25 +2695,274 @@ async function delWorkCase(id,back){
 }
 // رزرو
 const CS=['درخواست لغو','تأیید لغو','محاسبه مبلغ استرداد','صدور چک/حواله','تحویل مدارک','تحویل چک/وجه','تسویه نهایی'],PS={ok:'تأییدشده',used:'مصرف‌شده در قرارداد',ref:'مسترد شد',closed:'تسویه و مختومه'},RS={active:'فعال',cancelling:'در حال لغو',cancel:'لغو و تسویه‌شده',conv:'تبدیل به قرارداد'};
-const allPays=()=>[...S.reservations.flatMap(r=>r.pays.map(p=>({...p,r}))),...S.contracts.flatMap(c=>c.inst.filter(i=>i.paid&&i.ref).map(i=>({ref:i.ref,c}))),...(S.ledger||[]).filter(r=>r.ref).map(r=>({ref:r.ref,ledger:r}))];
+const allPays=()=>[
+  ...S.reservations.flatMap(r=>r.pays.map(p=>({...p,r}))),
+  ...S.contracts.flatMap(c=>(c.inst||[]).flatMap(i=>instPays(i).filter(p=>p.ref).map(p=>({ref:p.ref,c,inst:i,pay:p})))),
+  ...(S.ledger||[]).filter(r=>r.ref).map(r=>({ref:r.ref,ledger:r}))
+];
 const dupRef=(x,except)=>!!findPayRefHit(x,except);
 const lg=(r,t,by)=>(r.log=r.log||[]).push({d:todayJ(),h:new Date().toTimeString().slice(0,5),by:by||S.me||'—',t});
 const rPaid=r=>sum(r.pays,p=>p.amt),RF=()=>S.cfg.fine||30000000,RD=()=>S.cfg.days||20;
-const PF=[{k:'payer',l:'نام صاحب حساب مبدأ (پرداخت‌کننده)',r:1,on:(m,f)=>{if(f){const e=m.querySelector('[name=cust]');if(e)m.querySelector('[name=payer]').value=cust(e.value).name}}},{k:'acct',l:'شماره حساب/کارت مبدأ',r:1},{k:'ref',l:'شماره پیگیری / فیش',r:1},{k:'rel',l:'رابطه با مشتری (فقط پرداخت شخص ثالث)'},{k:'appv',l:'تأییدکننده مدیریتی (فقط شخص ثالث)'}];
+const PF=[{k:'payer',l:'نام صاحب حساب مبدأ (پرداخت‌کننده)',r:1,on:(m,f)=>{if(!f)return;const p=m.querySelector('[name=payer]');if(p&&String(p.value||'').trim())return;const e=m.querySelector('[name=cust]');if(e&&p)p.value=cust(e.value).name}},{k:'acct',l:'شماره حساب/کارت مبدأ',r:1},{k:'ref',l:'شماره پیگیری / فیش',r:1},{k:'rel',l:'رابطه با مشتری (فقط پرداخت شخص ثالث)'},{k:'appv',l:'تأییدکننده مدیریتی (فقط شخص ثالث)'}];
 function mkPay(v,c){if(!assertPayRef(v.ref))return;
  const tp=nm(v.payer)!=nm(c.name);if(tp&&(!v.rel||!v.appv)){toast('پرداخت‌کننده با مشتری یکی نیست؛ رابطه و تأییدکننده مدیریتی را ثبت کنید');return}
  return{id:'پ-'+F(S.pn=(S.pn||1000)+1),amt:v.amt,date:v.date||v.pdate,ref:v.ref,acct:v.acct,payer:v.payer,tp,rel:v.rel,appv:v.appv,s:'ok'}}
 function res(){return `<div class=top><h2>رزروها و رزرونامه‌ها</h2><div><button onclick="chkF()">استعلام فیش</button> <button onclick="cfgR()">تنظیمات رویه رزرو</button> <button class=pri onclick="addR()">رزرو جدید</button></div></div>${sb()}${S.reservations.length?tbl(['شماره','مشتری','واحد','پرداخت‌شده','مانده','مهلت','وضعیت',''],S.reservations.map(r=>{const pd=rPaid(r),d=diff(r.deadline),a=r.st=='active';return `<tr data-s="${esc(N(r.no+cust(r.cust).name+cust(r.cust).phone+unitTxt(r.proj,r.unit)))}"><td>${r.no}</td><td>${esc(cust(r.cust).name)}</td><td>${esc(unitTxt(r.proj,r.unit))}</td><td>${money(pd)}</td><td>${money(Math.max(0,r.need-pd))}</td><td>${F(r.deadline)}${a&&pd<r.need?` <span class="badge ${d<0?'bad':d<=7?'warn':'ok'}">${d<0?F(-d)+' روز گذشته':F(d)+' روز'}</span>`:''}</td><td>${RS[r.st]}${r.st=='cancelling'?' – '+CS[r.cancel.h.length]:''}</td><td><button class="sm pri" onclick="go('rd','${r.id}')">پرونده</button>${canDeleteRec()?` <button class="sm x" onclick="delR('${r.id}')">حذف</button>`:''}</td></tr>`}).join('')):empty('رزروی ثبت نشده است.')}`}
-function addR(pre){pre=pre||{};if(!S.customers.length||!unitOpts().length)return toast('ابتدا یک مشتری و یک واحد آزاد ثبت کنید');
- form('رزرو جدید',[{k:'cust',l:'مشتری',t:'select',o:S.customers.map(c=>[c.id,c.name+' – '+c.nid]),on:(m,f)=>{if(!f)m.querySelector('[name=payer]').value=cust(m.querySelector('[name=cust]').value).name}},{k:'unit',l:'واحد',t:'select',o:unitOpts()},{k:'need',l:'مبلغ تسویه اولیه (پیش‌پرداخت کامل)',t:'money',r:1},{k:'fine',l:'مبلغ کسر در صورت لغو',t:'money',d:RF()},{k:'amt',l:'مبلغ پرداختی بابت رزرو',t:'money',r:1},{k:'pdate',l:'تاریخ پرداخت',d:todayJ(),j:1,r:1},...PF,{k:'deadline',l:'مهلت تسویه اولیه',j:1,r:1,d:addD(todayJ(),RD())},{k:'by',l:'ثبت‌کننده',r:1,d:S.me||''},{k:'appr',l:'تأییدکننده رزرو',r:1}],pre,v=>{
- const[pid,unit]=v.unit.split('|');if(unitOf(pid,unit).st!='free'){toast('این واحد دیگر آزاد نیست');return false}
- const p=mkPay(v,cust(v.cust));if(!p)return false;S.me=v.by;
- const r={id:uid(),no:nextReserveNo(v.pdate),cust:v.cust,proj:pid,unit,need:v.need,fine:v.fine,deadline:v.deadline,date:v.pdate,st:'active',pays:[p],by:v.by,appr:v.appr,log:[]};
- lg(r,`ثبت رزرو و قفل شدن واحد؛ پرداخت ${p.id} به مبلغ ${T(p.amt)} از حساب ${esc(p.payer)}؛ تأییدکننده: ${v.appr}`,v.by);S.reservations.push(r);setSt(pid,unit,'res');save();go('rd',r.id)})}
+function addR(pre){pre=pre||{};
+ if(!(S.projects||[]).length)return toast('ابتدا یک پروژه ثبت کنید');
+ const freeUnits=unitOpts(pre.unit);
+ const forceNewUnit=!freeUnits.length&&!pre.unit;
+ const forceNew=!S.customers.length&&!pre.cust;
+ const firstUnit=pre.unit||(freeUnits[0]||[])[0]||'';
+ const firstProj=pre.proj||String(firstUnit).split('|')[0]||((S.projects[0]||{}).id)||'';
+ UNIT_OWNERS_DRAFT={dangSplit:false,owners:[]};
+ form('رزرو جدید',[
+  ...inlineCustFields({
+    forceNew,
+    syncPayer:1,
+    custOn:(m,f)=>{if(!f){const payer=m.querySelector('[name=payer]');const e=m.querySelector('[name=cust]');if(payer&&e&&e.value)payer.value=cust(e.value).name}}
+  }),
+  ...inlineUnitFields({forceNew:forceNewUnit,preUnit:pre.unit}),
+  {k:'need',l:'مبلغ تسویه اولیه (پیش‌پرداخت کامل)',t:'money',r:1},
+  {k:'fine',l:'مبلغ کسر در صورت لغو',t:'money',d:RF()},
+  {k:'amt',l:'مبلغ پرداختی بابت رزرو',t:'money',r:1},
+  {k:'pdate',l:'تاریخ پرداخت',d:todayJ(),j:1,r:1},
+  ...PF,
+  {k:'deadline',l:'مهلت تسویه اولیه',j:1,r:1,d:addD(todayJ(),RD())},
+  {k:'by',l:'ثبت‌کننده',r:1,d:S.me||''},
+  {k:'appr',l:'تأییدکننده رزرو',r:1}
+ ],{...pre,newCust:forceNew,newUnit:forceNewUnit,projId:firstProj,_boxClass:'box-wide'},v=>{
+ const parsed=parseFormCust(v);if(!parsed)return false;
+ const parsedUnit=parseFormUnit(v);if(!parsedUnit)return false;
+ if(parsedUnit.mode==='sel'&&unitOf(parsedUnit.projId,parsedUnit.unitId).st!='free'){toast('این واحد دیگر آزاد نیست');return false}
+ const who=parsed.mode==='new'?parsed.cv.name:cust(parsed.id).name;
+ if(!(v.payer||'').trim())v.payer=who;
+ const p=mkPay(v,{name:who});if(!p)return false;
+ const unitLine=parsedUnit.mode==='new'
+   ?`${parsedUnit.projName} – واحد ${parsedUnit.draft.no}${parsedUnit.draft.block?' · بلوک '+parsedUnit.draft.block:''}`
+   :unitTxt(parsedUnit.projId,parsedUnit.unitId);
+ askConfirm({title:'تأیید ثبت رزرو',body:`<p>رزرو برای <b>${esc(who)}</b>${parsed.mode==='new'?' <span class="badge ok">مشتری جدید</span>':''} ثبت شود؟</p><p class=fd>واحد: ${esc(unitLine)}${parsedUnit.mode==='new'?' <span class="badge ok">واحد جدید</span>':''}</p>${inlineDangConfirmHtml(parsedUnit)}<p class=fd>پرداخت ${money(v.amt)} · مهلت ${F(v.deadline)}</p>`},()=>{
+  const custId=commitFormCust(parsed);
+  const bound=commitFormUnit(parsedUnit,'res');
+  if(!bound){toast('ثبت واحد انجام نشد');return false}
+  UNIT_OWNERS_DRAFT=null;
+  S.me=v.by;
+  const r={id:uid(),no:nextReserveNo(v.pdate),cust:custId,proj:bound.projId,unit:bound.unitId,need:v.need,fine:v.fine,deadline:v.deadline,date:v.pdate,st:'active',pays:[p],by:v.by,appr:v.appr,log:[]};
+  lg(r,`ثبت رزرو و قفل شدن واحد؛ پرداخت ${p.id} به مبلغ ${T(p.amt)} از حساب ${esc(p.payer)}؛ تأییدکننده: ${v.appr}${parsed.mode==='new'?'؛ مشتری جدید هم‌زمان ثبت شد':''}${bound.created?'؛ واحد جدید هم‌زمان در پروژه ثبت شد':''}${parsedUnit.mode==='new'&&parsedUnit.draft.dangSplit?'؛ تقسیط دانگی روی واحد ثبت شد':''}`,v.by);
+  S.reservations.push(r);setSt(bound.projId,bound.unitId,'res');go('rd',r.id);
+  const bits=[];
+  if(parsed.mode==='new')bits.push('مشتری');
+  if(bound.created)bits.push('واحد');
+  if(parsedUnit.mode==='new'&&parsedUnit.draft.dangSplit)bits.push('تقسیط دانگی');
+  bits.push('رزرو');
+  persistAfter(bits.join(' و ')+' ثبت شد');
+  return true;
+ });return false})}
 const payR=id=>{const r=S.reservations.find(x=>x.id==id);form('پرداخت جدید رزرو',[{k:'amt',l:'مبلغ (تومان)',t:'money',r:1},{k:'date',l:'تاریخ',d:todayJ(),j:1,r:1},...PF,{k:'by',l:'ثبت‌کننده',r:1,d:S.me||''}],{payer:cust(r.cust).name},v=>{const p=mkPay(v,cust(r.cust));if(!p)return false;S.me=v.by;r.pays.push(p);lg(r,`پرداخت ${p.id} به مبلغ ${T(p.amt)} ثبت شد (فیش ${F(p.ref)})`,v.by);save();render()})};
 const cancelR=id=>{const r=S.reservations.find(x=>x.id==id);form('ثبت درخواست لغو رزرو',[{k:'reason',l:'علت لغو',t:'area',w:1,r:1},{k:'date',l:'تاریخ درخواست',d:todayJ(),j:1,r:1},{k:'fine',l:'مبلغ کسر بابت لغو (قابل تنظیم)',t:'money',d:r.fine||RF()},{k:'by',l:'ثبت‌کننده',r:1,d:S.me||''}],0,v=>{const paid=rPaid(r);r.st='cancelling';r.fine=v.fine;r.cancel={reason:v.reason,date:v.date,fine:v.fine,refund:Math.max(0,paid-v.fine),h:[{s:0,d:v.date,by:v.by,doc:''}]};S.me=v.by;lg(r,`درخواست لغو ثبت شد (واحد تا تسویه نهایی قفل می‌ماند). علت: ${v.reason}. پرداختی ${T(paid)}، کسر ${T(v.fine)}، قابل استرداد ${T(r.cancel.refund)}`,v.by);save();render()})};
 function nextC(id){const r=S.reservations.find(x=>x.id==id),k=r.cancel.h.length,need=k==3||k==5;form('مرحله: '+CS[k],[{k:'date',l:'تاریخ انجام',d:todayJ(),j:1,r:1},{k:'doc',l:need?'شماره چک / حواله / سند':'شماره سند (اختیاری)',r:need},{k:'by',l:'انجام‌دهنده',r:1,d:S.me||''}],0,v=>{r.cancel.h.push({s:k,d:v.date,by:v.by,doc:v.doc});S.me=v.by;lg(r,`مرحله «${CS[k]}» انجام شد${v.doc?' – سند '+F(v.doc):''}`,v.by);if(k==5)r.pays.forEach(p=>p.s='ref');if(k==CS.length-1){r.st='cancel';r.pays.forEach(p=>p.s='closed');setSt(r.proj,r.unit,'free');lg(r,'تسویه نهایی؛ پرونده مختومه و واحد آزاد شد',v.by)}save();render()})}
-const toC=id=>{const r=S.reservations.find(x=>x.id==id);addC({cust:r.cust,unit:r.proj+'|'+r.unit,total:unitSaleTotal(unitOf(r.proj,r.unit)),down:rPaid(r),resId:id,rdate:r.pays[r.pays.length-1].date})};
+const contractByRes=resId=>(S.contracts||[]).find(c=>c.resId===resId)||null;
+const toC=id=>convertReservation(id);
+function reserveScheduleSeed(r){
+  const rows=(Array.isArray(r?.doc?.schedule)?r.doc.schedule:[]).filter(s=>Number(s.amt)>0||(s.date||'').trim());
+  if(!rows.length)return null;
+  const first=rows.find(s=>s.date)?.date||addM(todayJ(),1);
+  let step=1;
+  if(rows.length>1&&rows[0].date&&rows[1].date){
+    const g=monthGap(rows[0].date,rows[1].date);
+    if(g>0)step=g;
+  }
+  return{count:rows.length,first,step,rows};
+}
+function paidInstFromReservePays(r){
+  return(r.pays||[]).map(p=>({
+    id:uid(),
+    title:'پرداخت رزرو '+(p.id||''),
+    amt:num(p.amt),
+    date:p.date||r.date||todayJ(),
+    paid:true,
+    pdate:p.date||r.date||todayJ(),
+    ref:p.ref||'',
+    fromPayId:p.id||'',
+    payer:p.payer||'',
+    acct:p.acct||'',
+    lateDays:0,lateCalc:0,lateFee:0,lateNote:''
+  }));
+}
+function buildUnpaidFromPlan(rest,v,seedRows,useSchedule){
+  const out=[];
+  if(useSchedule&&seedRows?.length){
+    const amts=seedRows.map(s=>num(s.amt));
+    const sumA=sum(amts,x=>x);
+    let scaled=amts.slice();
+    if(sumA>0&&Math.abs(sumA-rest)>1){
+      scaled=amts.map(a=>Math.floor((a/sumA)*rest/1000)*1000);
+      const gap=rest-sum(scaled,x=>x);
+      if(scaled.length)scaled[scaled.length-1]+=gap;
+    }else if(!(sumA>0)){
+      const n=seedRows.length,each=n?Math.floor(rest/n/1000)*1000:0;
+      scaled=seedRows.map((_,i)=>i===n-1?rest-each*(n-1):each);
+    }
+    seedRows.forEach((s,i)=>{
+      out.push({id:uid(),title:'قسط '+F(i+1),amt:scaled[i],date:s.date||addM(v.first,i*Math.max(1,parseInt(N(v.step))||1)),paid:false,pdate:'',ref:'',lateDays:0,lateCalc:0,lateFee:0,lateNote:''});
+    });
+    return out;
+  }
+  const n=Math.max(0,parseInt(N(v.count))||0),step=Math.max(1,parseInt(N(v.step))||1),each=n?Math.floor(rest/n/1000)*1000:0;
+  for(let i=0;i<n;i++)out.push({id:uid(),title:'قسط '+F(i+1),amt:i==n-1?rest-each*(n-1):each,date:addM(v.first,i*step),paid:false,pdate:'',ref:'',lateDays:0,lateCalc:0,lateFee:0,lateNote:''});
+  return out;
+}
+function syncConvertSummary(m,paid,seedCount){
+  if(!m)return;
+  const price=syncContractPrice(m)||calcInstPrice(0,false,false);
+  const rest=Math.max(0,price.total-paid);
+  const box=m.querySelector('#cvtSum');
+  if(!box)return;
+  const useSch=!!m.querySelector('[name=useSchedule]')?.checked&&seedCount>0;
+  const n=useSch?seedCount:(parseInt(N(m.querySelector('[name=count]')?.value))||0);
+  box.innerHTML=`${contractPriceSummaryHtml(price)}
+    <div class=cvt-kpis>
+      <div><span>پرداخت‌های رزرو</span><b>${money(paid)} تومان</b></div>
+      <div><span>مانده برای اقساط</span><b>${money(rest)} تومان</b></div>
+      <div><span>اقساط جدید</span><b>${F(rest>0?n:0)}</b></div>
+    </div>`;
+}
+function convertReservation(id){
+  const r=S.reservations.find(x=>x.id==id);
+  if(!r)return toast('رزرو پیدا نشد');
+  if(r.st!=='active')return toast('فقط رزرو فعال قابل تبدیل به قرارداد است');
+  if(contractByRes(r.id))return toast('برای این رزرو قبلاً قرارداد ثبت شده است');
+  const cu=cust(r.cust),u=unitOf(r.proj,r.unit),p=proj(r.proj)||{};
+  const paid=rPaid(r),needRem=Math.max(0,num(r.need)-paid);
+  const seed=reserveScheduleSeed(r);
+  const startBase=unitSaleTotal(u);
+  const m=$('#modal');
+  m.innerHTML=`<div class="box box-wide cvt-box">
+    <h3 style="margin-top:0">تبدیل رزرو به قرارداد</h3>
+    <p class=fd>مشتری و واحد از رزرو <b>${esc(r.no)}</b> قفل هستند. هر پرداخت رزرو به‌صورت قسط پرداخت‌شده وارد قرارداد می‌شود.</p>
+    <div class=cvt-review>
+      <div class=cvt-card>
+        <h4>مبدأ رزرو</h4>
+        <dl class=fig>
+          <dt>مشتری</dt><dd>${esc(cu.name)} · ${F(cu.phone||'—')}</dd>
+          <dt>واحد</dt><dd>${esc(p.name||'—')} – واحد ${esc(u.no||'—')}</dd>
+          <dt>پرداخت‌شده / تسویه اولیه</dt><dd>${money(paid)} / ${money(r.need)} تومان</dd>
+          <dt>مهلت رزرو</dt><dd>${F(r.deadline)}</dd>
+        </dl>
+        ${needRem>0?`<p class=warn-line>تسویه اولیه هنوز کامل نیست (مانده ${money(needRem)} تومان). می‌توانید تبدیل کنید؛ مانده وارد اقساط قرارداد می‌شود.</p>`:''}
+        ${u.dangSplit?unitOwnersViewHtml(u):''}
+      </div>
+      <div class=cvt-card>
+        <h4>پرداخت‌های منتقل‌شونده</h4>
+        ${(r.pays||[]).length?`<div class=cvt-pays>${(r.pays||[]).map(pay=>`<div class=cvt-pay>
+          <b>${money(pay.amt)} تومان</b>
+          <span>${F(pay.date)} · ${esc(pay.payer||'—')}</span>
+          <span class=fd>فیش ${F(pay.ref||'—')}${pay.acct?' · حساب '+F(pay.acct):''}</span>
+        </div>`).join('')}</div>`:`<p class=fd>پرداختی ثبت نشده است.</p>`}
+      </div>
+    </div>
+    <div class=grid style="margin-top:12px">
+      <label>نوع قرارداد<select name=type>${Object.entries(TYPES).map(([k,v])=>`<option value="${k}">${esc(v.name)}</option>`).join('')}</select></label>
+      <label>تاریخ قرارداد<input name=date readonly style="cursor:pointer" value="${F(todayJ())}"></label>
+      <label>قیمت پایه واحد (تومان)<input name=base inputmode=numeric></label>
+      <div class=w>${contractPricePanelHtml()}</div>
+      <label>جریمه دیرکرد روزانه (٪)<input name=latePctDaily inputmode=decimal value="${F('0')}"></label>
+      <label>مدت قرارداد / تحویل (ماه)<input name=dur value="${F('12')}"></label>
+      <label>تعداد اقساط مانده<input name=count value="${F(String(seed?.count||12))}"></label>
+      <label>تاریخ اولین قسط<input name=first readonly style="cursor:pointer" value="${F(seed?.first||addM(todayJ(),1))}"></label>
+      <label>فاصله اقساط (ماه)<input name=step value="${F(String(seed?.step||1))}"></label>
+      ${seed?`<label class="w chk-lab"><input type=checkbox name=useSchedule checked> استفاده از مبالغ/تاریخ‌های جدول رزرونامه برای اقساط مانده</label>`:''}
+      <label class=w>توضیحات<textarea name=note rows=2></textarea></label>
+      <div class="w" id=cvtSum></div>
+    </div>
+    <div class=act>
+      <button type=button class=pri id=ok>تأیید و ثبت قرارداد</button>
+      <button type=button onclick="closeM()">انصراف</button>
+    </div>
+  </div>`;
+  m.classList.add('on');
+  const el=k=>m.querySelector(`[name=${k}]`);
+  const fm=v=>v?F((+v).toLocaleString('en')).replace(/,/g,'٬'):'';
+  el('base').value=fm(startBase);
+  el('date').onclick=()=>dpick(el('date'));
+  el('first').onclick=()=>dpick(el('first'));
+  const paint=()=>syncConvertSummary(m,paid,seed?.rows?.length||0);
+  el('base').oninput=()=>{el('base').value=fm(num(el('base').value));paint()};
+  m.querySelectorAll('#cprice [name=extraOn],#cprice [name=profitOn]').forEach(e=>{e.onchange=()=>paint()});
+  el('count').oninput=paint;el('step').oninput=paint;
+  const useSch=el('useSchedule');if(useSch)useSch.onchange=paint;
+  paint();
+  $('#ok').onclick=()=>{
+    const type=el('type').value;
+    const date=normJ(el('date').value)||'';
+    const first=normJ(el('first').value)||'';
+    const base=num(el('base').value);
+    const extraOn=!!m.querySelector('#cprice [name=extraOn]')?.checked;
+    const profitOn=!!m.querySelector('#cprice [name=profitOn]')?.checked;
+    const price=calcInstPrice(base,extraOn,profitOn);
+    if(!date){toast('تاریخ قرارداد معتبر نیست');return}
+    if(!(price.total>0)){toast('مبلغ نهایی قرارداد معتبر نیست');return}
+    if(price.total<paid){toast('مبلغ قرارداد از جمع پرداخت‌های رزرو کمتر است');return}
+    const useSchedule=!!el('useSchedule')?.checked&&!!seed?.rows?.length;
+    if(!useSchedule&&!first){toast('تاریخ اولین قسط را وارد کنید');return}
+    const v={
+      type,date,first,
+      count:el('count').value,
+      step:el('step').value,
+      dur:el('dur').value.trim(),
+      note:el('note').value.trim(),
+      latePctDaily:num(el('latePctDaily').value),
+    };
+    const rest=Math.max(0,price.total-paid);
+    if(!useSchedule&&rest>0&&!(parseInt(N(v.count))>0)){toast('تعداد اقساط مانده را وارد کنید');return}
+    askConfirm({
+      title:'تأیید تبدیل رزرو به قرارداد',
+      body:`<p>رزرو <b>${esc(r.no)}</b> به قرارداد ${esc(typeName(type))} برای <b>${esc(cu.name)}</b> تبدیل شود؟</p>
+        ${contractPriceSummaryHtml(price)}
+        <p class=fd>${F((r.pays||[]).length)} پرداخت رزرو به‌عنوان قسط پرداخت‌شده · مانده ${money(rest)} تومان</p>
+        ${needRem>0?`<p class=warn-line>تسویه اولیه رزرو ناقص است.</p>`:''}`,
+    },()=>{
+      commitConvert(r,{price,v,useSchedule,seedRows:seed?.rows||[]});
+      return true;
+    });
+  };
+}
+function commitConvert(r,plan){
+  if(!r||r.st!=='active'){toast('رزرو دیگر قابل تبدیل نیست');return false}
+  if(contractByRes(r.id)){toast('برای این رزرو قبلاً قرارداد ثبت شده');return false}
+  const paidInst=paidInstFromReservePays(r);
+  const paid=sum(paidInst,i=>i.amt);
+  const rest=Math.max(0,plan.price.total-paid);
+  const unpaid=rest>0?buildUnpaidFromPlan(rest,plan.v,plan.seedRows,plan.useSchedule):[];
+  const inst=[...paidInst,...unpaid].sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  const cid=uid();
+  const c={
+    id:cid,
+    no:'ق-'+F(nextSeq('cn')),
+    type:plan.v.type,
+    cust:r.cust,
+    proj:r.proj,
+    unit:r.unit,
+    date:plan.v.date,
+    total:plan.price.total,
+    baseTotal:plan.price.base,
+    extraOn:plan.price.extraOn,extraPct:plan.price.extraPct,extraAmt:plan.price.extraAmt,
+    profitOn:plan.price.profitOn,profitPct:plan.price.profitPct,profitAmt:plan.price.profitAmt,
+    dur:plan.v.dur,note:plan.v.note,latePctDaily:num(plan.v.latePctDaily),
+    resId:r.id,
+    inst
+  };
+  S.contracts.push(c);
+  r.st='conv';
+  (r.pays||[]).forEach(p=>{p.s='used'});
+  lg(r,`تبدیل به قرارداد ${c.no}؛ ${F(paidInst.length)} پرداخت رزرو به اقساط پرداخت‌شده منتقل شد`);
+  setSt(r.proj,r.unit,'sold');
+  save();
+  closeM();
+  go('cd',cid);
+  toast('رزرو به قرارداد تبدیل شد');
+  return true;
+}
 const cfgR=()=>form('تنظیمات رویه رزرو',[{k:'fine',l:'مبلغ کسر پیش‌فرض لغو (تومان)',t:'money',d:RF()},{k:'days',l:'مهلت پیش‌فرض تکمیل وجه (روز)',d:String(RD())}],0,v=>{S.cfg={fine:v.fine,days:parseInt(N(v.days))||20};save();toast('تنظیمات ذخیره شد')});
 const chkF=()=>form('استعلام فیش / پرداخت',[{k:'ref',l:'شماره فیش، پیگیری یا شناسه پرداخت',r:1}],0,v=>{
   const q=refKey(v.ref);
@@ -1641,9 +2980,9 @@ const chkF=()=>form('استعلام فیش / پرداخت',[{k:'ref',l:'شمار
 function msgs(id){const r=S.reservations.find(x=>x.id==id),c=cust(r.cust),u=unitTxt(r.proj,r.unit),p=rPaid(r),k=r.cancel||{fine:r.fine,refund:0},n=c.name,L=[['تأیید ثبت رزرو',`${n} عزیز، سلام و احترام.\nرزرو ${u} با دریافت ${T(p)} ثبت شد و واحد تا تاریخ ${F(r.deadline)} به نام شما نگه‌داری می‌شود. از اعتماد شما سپاسگزاریم و در تمام مراحل در کنار شما هستیم.\n${COMPANY}`],['یادآوری مهلت تکمیل وجه',`${n} عزیز، سلام و وقت بخیر.\nبه‌عنوان یادآوری دوستانه، مهلت تکمیل وجه رزرو ${u} تا تاریخ ${F(r.deadline)} است و مانده مبلغ ${T(Math.max(0,r.need-p))} می‌باشد. اگر برای هماهنگی یا تمدید مهلت نیاز به راهنمایی دارید، همکاران ما آماده‌اند.\n${COMPANY}`],['اطلاع‌رسانی لغو رزرو',`${n} عزیز، سلام و احترام.\nدرخواست لغو رزرو ${u} ثبت شد و شرایط شما را به‌خوبی درک می‌کنیم. طبق رزرونامه، از مبلغ پرداختی ${T(p)}، مبلغ ${T(k.fine)} کسر و ${T(k.refund)} به شما مسترد خواهد شد. مراحل تسویه طبق روال شرکت پیگیری می‌شود و از هر مرحله به شما اطلاع می‌دهیم.\n${COMPANY}`],['آماده بودن چک/وجه استرداد',`${n} عزیز، سلام و وقت بخیر.\nمبلغ استرداد رزرو ${u} آماده تحویل است. لطفاً با همراه داشتن مدارک لازم به دفتر مراجعه فرمایید تا مراحل تسویه نهایی انجام شود.\n${COMPANY}`]];
  $('#modal').innerHTML=`<div class=box><h3 style="margin-top:0">پیام‌های آماده – ${esc(n)}</h3>${L.map((m,i)=>`<label>${m[0]}<textarea rows=5 id=m${i}>${esc(m[1])}</textarea></label><button class=sm onclick="cp(${i})">کپی</button><hr>`).join('')}<div class=act><a class=ph href="tel:${N(c.phone||'')}">☎ ${F(c.phone||'')}</a><button onclick=closeM()>بستن</button></div></div>`;$('#modal').classList.add('on')}
 const cp=i=>{const t=$('#m'+i);t.select();try{navigator.clipboard.writeText(t.value)}catch(e){document.execCommand('copy')}toast('کپی شد')};
-function rd(){const r=S.reservations.find(x=>x.id==V.id);if(!r)return res();const c=cust(r.cust),pd=rPaid(r),rem=Math.max(0,r.need-pd),d=diff(r.deadline),a=r.st=='active',k=r.cancel,cur=k?k.h.length:0;
- return `<div class=top><h2>پرونده رزرو ${r.no}</h2><div class=noprint><button onclick="go('res')">بازگشت</button> <button onclick="msgs('${r.id}')">پیام‌های آماده</button> <button onclick="openDoc('${r.id}','res')">رزرونامه (چاپ)</button>${a?` <button onclick="payR('${r.id}')">پرداخت جدید</button> <button class=pri onclick="toC('${r.id}')">تبدیل به قرارداد</button> <button class=x onclick="cancelR('${r.id}')">درخواست لغو</button>`:''}${canDeleteRec()?` <button class="btn-ghost danger" onclick="delR('${r.id}')">حذف کامل</button>`:''}</div></div>
- <p>مشتری: <b>${esc(c.name)}</b> ☎ ${F(c.phone||'—')} | واحد: <b>${esc(unitTxt(r.proj,r.unit))}</b> | وضعیت: <span class="badge ${a?'warn':r.st=='cancel'?'bad':r.st=='conv'?'ok':''}">${RS[r.st]}</span> ${a&&d<0&&rem>0?'<span class="badge bad">مهلت گذشته؛ نیازمند تعیین تکلیف</span>':''}</p>
+function rd(){const r=S.reservations.find(x=>x.id==V.id);if(!r)return res();const c=cust(r.cust),pd=rPaid(r),rem=Math.max(0,r.need-pd),d=diff(r.deadline),a=r.st=='active',k=r.cancel,cur=k?k.h.length:0,linked=contractByRes(r.id);
+ return `<div class=top><h2>پرونده رزرو ${r.no}</h2><div class=noprint><button onclick="go('res')">بازگشت</button> <button onclick="msgs('${r.id}')">پیام‌های آماده</button> <button onclick="openDoc('${r.id}','res')">رزرونامه (چاپ)</button>${a?` <button onclick="payR('${r.id}')">پرداخت جدید</button> <button class=pri onclick="toC('${r.id}')">تبدیل به قرارداد</button> <button class=x onclick="cancelR('${r.id}')">درخواست لغو</button>`:''}${linked?` <button class=pri onclick="go('cd','${linked.id}')">مشاهده قرارداد ${esc(linked.no)}</button>`:''}${canDeleteRec()?` <button class="btn-ghost danger" onclick="delR('${r.id}')">حذف کامل</button>`:''}</div></div>
+ <p>مشتری: <b>${esc(c.name)}</b> ☎ ${F(c.phone||'—')} | واحد: <b>${esc(unitTxt(r.proj,r.unit))}</b> | وضعیت: <span class="badge ${a?'warn':r.st=='cancel'?'bad':r.st=='conv'?'ok':''}">${RS[r.st]}</span> ${a&&d<0&&rem>0?'<span class="badge bad">مهلت گذشته؛ نیازمند تعیین تکلیف</span>':''}${linked?` · قرارداد: <b>${esc(linked.no)}</b>`:''}</p>
  <div class=stats><div class=st><b>${money(pd)}</b><span>پرداخت‌شده (تومان)</span></div><div class=st><b>${money(r.need)}</b><span>تسویه اولیه</span></div><div class=st><b>${money(rem)}</b><span>مانده تا تکمیل</span></div><div class=st><b>${F(r.deadline)}</b><span>مهلت (${d<0?F(-d)+' روز گذشته':F(d)+' روز مانده'})</span></div><div class=st><b>${esc(r.by||'—')} / ${esc(r.appr||'—')}</b><span>ثبت‌کننده / تأییدکننده</span></div></div>
  ${k?`<h3>فرآیند لغو و استرداد</h3><div class=st style="margin-bottom:10px">علت: ${esc(k.reason)}<br>پرداختی ${T(pd)} − کسر ${T(k.fine)} = <b>قابل استرداد ${T(k.refund)}</b></div><div class=fcs>${CS.map((s,i)=>{const h=k.h[i];return `<div class="fc ${h?'okish':i==cur?'today':''}"><b>${F(i+1)}. ${s}</b><span class=fd>${h?F(h.d)+' – '+esc(h.by)+(h.doc?' – سند '+F(h.doc):''):i==cur?'مرحله جاری':'در انتظار'}</span></div>`}).join('')}</div>${r.st=='cancelling'?`<button class="pri noprint" onclick="nextC('${r.id}')">انجام مرحله: ${CS[cur]}</button>`:''}`:''}
  <h3>پرداخت‌ها</h3>${tbl(['شناسه یکتا','تاریخ','مبلغ','پرداخت‌کننده (صاحب حساب)','حساب مبدأ','فیش / پیگیری','وضعیت'],r.pays.map(p=>`<tr><td>${p.id||'—'}</td><td>${F(p.date)}</td><td>${money(p.amt)}</td><td>${esc(p.payer||'—')}${p.tp?` <span class="badge warn">شخص ثالث – ${esc(p.rel||'')} – تأیید: ${esc(p.appv||'')}</span>`:''}</td><td>${F(p.acct||'—')}</td><td>${F(p.ref||'—')}</td><td><span class="badge ${p.s=='closed'?'':'ok'}">${PS[p.s]||'تأییدشده'}</span></td></tr>`).join(''))}
@@ -2100,42 +3439,60 @@ function facV(c){const f=c.fac;return `<section class="units-panel noprint">
 const KY=['تصویر کارت ملی','تصویر شناسنامه','شبا/حساب بانکی متعلق به خود مشتری','نشانی و شماره تماس تأییدشده','فرم اعلام پرداخت امضاشده'];
 const setK=(id,k,v)=>{const c=cust(id);if(!c.id)return;(c.kyc=c.kyc||{})[k]=!!v;if(!v)delete c.kyc[k];save();render()};
 const addN=id=>form('ثبت تماس / یادداشت',[{k:'d',l:'تاریخ',d:todayJ(),j:1,r:1},{k:'t',l:'شرح تماس یا پیگیری',t:'area',w:1,r:1},{k:'by',l:'ثبت‌کننده',r:1,d:S.me||ME.name||''}],0,v=>{S.me=v.by;const c=cust(id);if(!c.id)return false;(c.notes=c.notes||[]).push(v);save();render()});
-function cuV(){const c=S.customers.find(x=>x.id==V.id);if(!c)return custV();const cs=S.contracts.filter(x=>x.cust==c.id),rv=S.reservations.filter(x=>x.cust==c.id),ls=S.leads.filter(x=>x.cust==c.id),k=c.kyc||{};
+function cuV(){const c=S.customers.find(x=>x.id==V.id);if(!c)return custV();const cs=S.contracts.filter(x=>x.cust==c.id),rv=S.reservations.filter(x=>x.cust==c.id),ls=S.leads.filter(x=>x.cust==c.id),k=c.kyc||{},shares=custDangShares(c.id),cis=custInstStats(cs);
  return `<div class=top><h2>${esc(c.name)}</h2><div><button onclick="go('cust')">بازگشت</button> <button onclick="addR({cust:'${c.id}'})">رزرو</button> <button onclick="addC({cust:'${c.id}'})">قرارداد</button> ${(can('acct')||can('admin'))?`<button class=btn-soft onclick="openAcctForCustomer('${c.id}')">حسابداری / پرداخت</button>`:''} <button class=pri onclick="addN('${c.id}')">ثبت تماس</button> ${canDeleteRec()?`<button class="btn-ghost danger" onclick="delCu('${c.id}')">حذف کامل پرونده</button>`:''}</div></div><p>کد ملی ${F(c.nid)} | پدر: ${esc(c.father||'—')} | ☎ <a class=ph href="tel:${N(c.phone)}">${F(c.phone)}</a> | ${esc(c.addr||'')}</p>
- <div class=stats><div class=st><b>${F(cs.length)}</b><span>قرارداد</span></div><div class=st><b>${money(sum(cs,paidSum))}</b><span>پرداخت‌شده</span></div><div class=st><b>${money(sum(cs,x=>x.total-paidSum(x)))}</b><span>مانده قراردادها</span></div><div class=st><b>${F(rv.length)}</b><span>رزرو</span></div></div>
+ <div class=stats><div class=st><b>${F(cs.length)}</b><span>قرارداد</span></div><div class=st><b>${money(sum(cs,paidSum))}</b><span>پرداخت‌شده</span></div><div class=st><b>${money(sum(cs,x=>x.total-paidSum(x)))}</b><span>مانده قراردادها</span></div><div class=st><b>${F(cis.paid)}${cis.total?` / ${F(cis.total)}`:''}</b><span>اقساط پرداخت‌شده</span></div><div class=st><b>${F(cis.unpaid+cis.partial)}</b><span>اقساط باقی‌مانده</span></div><div class=st><b>${F(rv.length)}</b><span>رزرو</span></div><div class=st><b>${F(shares.length)}</b><span>سهم دانگی</span></div></div>
  <h3>مدارک و احراز هویت (${F(KY.filter(x=>k[x]).length)} از ${F(KY.length)})</h3><div class=wrap style="padding:8px 12px">${KY.map(x=>`<label style="display:flex;gap:8px;align-items:center"><input type=checkbox style="width:auto" ${k[x]?'checked':''} onchange="setK('${c.id}','${x}',this.checked)"> ${x}</label>`).join('')}</div>
  ${ls.length?`<h3>سرنخ</h3>`+tbl(['منبع','مرحله','مسئول','هماهنگ‌کننده بازدید','پیگیری بعدی',''],ls.map(l=>`<tr><td>${esc(l.src||'')}</td><td>${LS[l.stage]}</td><td>${esc(l.rep||'—')}</td><td>${esc(l.vcName||'—')}${l.vcPhone?' – '+F(l.vcPhone):''}</td><td>${l.next?F(l.next):'—'}</td><td><button class=sm onclick="go('lv','${l.id}')">پرونده سرنخ</button></td></tr>`).join('')):''}
+ <h3>مالکیت دانگی</h3>${shares.length?tbl(['پروژه','واحد','سهم','توضیح',''],shares.map(s=>`<tr><td>${esc(s.proj.name)}</td><td>واحد ${esc(s.unit.no)}${s.unit.block?' · '+esc(s.unit.block):''}</td><td><b>${F(s.owner.dang)} دانگ</b> از ${F(DANG_MAX)}</td><td>${esc(s.owner.note||'—')}</td><td><button class=sm onclick="go('pd','${s.proj.id}')">واحدها</button></td></tr>`).join('')):empty('سهم دانگی ثبت‌شده‌ای ندارد.')}
  <h3>رزروها</h3>${rv.length?tbl(['شماره','واحد','پرداخت‌شده','وضعیت',''],rv.map(r=>`<tr><td>${r.no}</td><td>${esc(unitTxt(r.proj,r.unit))}</td><td>${money(rPaid(r))}</td><td>${RS[r.st]}</td><td><button class=sm onclick="go('rd','${r.id}')">پرونده</button></td></tr>`).join('')):empty('رزروی ندارد.')}
- <h3>قراردادها</h3>${cs.length?tbl(['شماره','نوع','واحد','مبلغ کل','پرداخت‌شده','مانده',''],cs.map(x=>`<tr><td>${x.no}</td><td>${typeName(x.type)}</td><td>${esc(unitTxt(x.proj,x.unit))}</td><td>${money(x.total)}</td><td>${money(paidSum(x))}</td><td>${money(x.total-paidSum(x))}</td><td><button class=sm onclick="go('cd','${x.id}')">باز کردن</button></td></tr>`).join('')):empty('قراردادی ندارد.')}
+ <h3>قراردادها</h3>${cs.length?tbl(['شماره','نوع','واحد','مبلغ کل','پرداخت‌شده','مانده','اقساط',''],cs.map(x=>{const s=instStats(x);return `<tr><td>${x.no}</td><td>${typeName(x.type)}</td><td>${esc(unitTxt(x.proj,x.unit))}</td><td>${money(x.total)}</td><td>${money(paidSum(x))}</td><td>${money(x.total-paidSum(x))}</td><td>${F(s.paid)}/${F(s.total)}</td><td><button class=sm onclick="go('cd','${x.id}')">باز کردن</button></td></tr>`}).join('')):empty('قراردادی ندارد.')}
  <h3>تاریخچه تماس‌ها و پیگیری‌ها</h3>${(c.notes||[]).length?tbl(['تاریخ','ثبت‌کننده','شرح'],[...c.notes].reverse().map(n=>`<tr><td>${F(n.d)}</td><td>${esc(n.by)}</td><td style="white-space:normal">${esc(n.t)}</td></tr>`).join('')):empty('هنوز تماسی ثبت نشده است.')}`}
-const dmDoc=(c,cu)=>{const L=(c.inst||[]).filter(i=>!i.paid&&diff(i.date)<=30);return `<div class=hd><span>شماره: ${c.no}</span><span>تاریخ: ${F(todayJ())}</span></div><h4>یادآوری / اظهارنامه پرداخت اقساط</h4><p>${esc(cu.name)} گرامی (کد ملی ${F(cu.nid)})؛ با سلام و احترام</p><p>بر اساس قرارداد ${c.no} مورخ ${F(c.date)} مربوط به ${esc(unitTxt(c.proj,c.unit))}، اقساط زیر سررسید شده یا نزدیک به سررسید است. خواهشمند است تا تاریخ‌های مقرر، وجه را از حساب بانکی متعلق به خودتان واریز و شماره پیگیری را به دفتر شرکت اعلام فرمایید. در صورت نیاز به هماهنگی، همکاران ما آماده راهنمایی هستند.</p>${L.length?tbl(['ردیف','شرح','مبلغ اصل','تخمین جریمه','سررسید','وضعیت'],L.map((i,k)=>{const d=diff(i.date),days=Math.max(0,-d),pct=instLatePct(c,i),fee=calcLateFee(i.amt,pct,days);return `<tr><td>${F(k+1)}</td><td>${esc(i.title)}</td><td>${money(i.amt)}</td><td>${days&&pct?money(fee)+` (${F(days)} روز × ${F(pct)}٪)`:'—'}</td><td>${F(i.date)}</td><td>${d<0?F(-d)+' روز تأخیر':d==0?'امروز':F(d)+' روز مانده'}</td></tr>`}).join('')):'<p>قسط سررسیدشده‌ای وجود ندارد.</p>'}<p>جمع اصل مبالغ: <b>${TW(sum(L,i=>i.amt))}</b></p>${Number(c.latePctDaily)?`<p class=fd>نرخ جریمه دیرکرد قرارداد: ${F(c.latePctDaily)}٪ از مبلغ قسط به‌ازای هر روز تأخیر.</p>`:''}${sg([COMPANY,'خریدار'])}`};
+const dmDoc=(c,cu)=>{
+  const L=(c.inst||[]).filter(i=>!isInstPaid(i)&&diff(i.date)<=30);
+  return `<div class=hd><span>شماره: ${c.no}</span><span>تاریخ: ${F(todayJ())}</span></div><h4>یادآوری / اظهارنامه پرداخت اقساط</h4><p>${esc(cu.name)} گرامی (کد ملی ${F(cu.nid)})؛ با سلام و احترام</p><p>بر اساس قرارداد ${c.no} مورخ ${F(c.date)} مربوط به ${esc(unitTxt(c.proj,c.unit))}، اقساط زیر سررسید شده یا نزدیک به سررسید است. خواهشمند است تا تاریخ‌های مقرر، وجه را از حساب بانکی متعلق به خودتان واریز و شماره پیگیری را به دفتر شرکت اعلام فرمایید. در صورت نیاز به هماهنگی، همکاران ما آماده راهنمایی هستند.</p>${L.length?tbl(['ردیف','شرح','مبلغ اصل','مانده','تخمین جریمه','سررسید','وضعیت'],L.map((i,k)=>{const d=diff(i.date),days=Math.max(0,-d),pct=instLatePct(c,i),fee=calcLateFee(instRemain(i)||i.amt,pct,days);return `<tr><td>${F(k+1)}</td><td>${esc(i.title)}</td><td>${money(i.amt)}</td><td>${money(instRemain(i))}</td><td>${days&&pct?money(fee)+` (${F(days)} روز × ${F(pct)}٪)`:'—'}</td><td>${F(i.date)}</td><td>${instPayStatusLabel(i)}</td></tr>`}).join('')):'<p>قسط سررسیدشده‌ای وجود ندارد.</p>'}<p>جمع مانده مبالغ: <b>${TW(sum(L,i=>instRemain(i)))}</b></p>${Number(c.latePctDaily)?`<p class=fd>نرخ جریمه دیرکرد قرارداد: ${F(c.latePctDaily)}٪ از مبلغ قسط به‌ازای هر روز تأخیر.</p>`:''}${sg([COMPANY,'خریدار'])}`;
+};
 const rcDoc=(c,cu,i)=>{
   const fee=Number(i&&i.lateFee)||0,base=Number(i&&i.amt)||0,pct=i?instLatePct(c,i):0;
-  const total=base+fee;
-  const lateHtml=fee||(i&&i.lateDays)?`<p>جزئیات جریمه دیرکرد: ${esc(lateDocLine({...i,_latePctUsed:pct}))}</p><p>اصل قسط: <b>${T(base)}</b> + جریمه: <b>${T(fee)}</b> = مبلغ دریافتی: <b>${TW(total)}</b></p>`:`<p>مبلغ اصل قسط: <b>${TW(base)}</b></p>`;
-  return `<div class=hd><span>شماره قرارداد: ${c.no}</span><span>تاریخ: ${F((i&&i.pdate)||todayJ())}</span></div><h4>رسید دریافت وجه</h4><p>از ${esc(cu.name)} (کد ملی ${F(cu.nid)}) بابت «${esc((i&&i.title)||'—')}» ${esc(unitTxt(c.proj,c.unit))} با شماره پیگیری ${F((i&&i.ref)||'—')} دریافت شد.</p>${lateHtml}<p>جمع اصل پرداختی تا این تاریخ: ${T(paidSum(c))} | مانده قرارداد: ${T(c.total-paidSum(c))}${lateSum(c)?` | جمع جریمه‌های وصول‌شده: ${T(lateSum(c))}`:''}</p>${sg([COMPANY,'تحویل‌گیرنده'])}`;
+  const pays=i?instPays(i):[];
+  const received=i?instReceived(i):0;
+  const total=Math.min(base,received)+fee;
+  const refs=pays.map(p=>p.ref).filter(Boolean);
+  const payLines=pays.length
+    ?`<ul style="padding-right:18px;margin:8px 0">${pays.map((p,idx)=>{
+        const over=!!payOverFrom(p);
+        const nl=payNoteLabel(p,c);
+        return `<li>${F(idx+1)}) ${money(p.amt)} تومان · ${F(p.date||'—')}${!over&&p.ref?` · ${F(p.ref)}`:''}${nl?` · ${esc(nl)}`:''}</li>`;
+      }).join('')}</ul>`
+    :'';
+  const lateHtml=fee||(i&&i.lateDays)?`<p>جزئیات جریمه دیرکرد: ${esc(lateDocLine({...i,_latePctUsed:pct}))}</p><p>اصل قسط: <b>${T(base)}</b> + جریمه: <b>${T(fee)}</b> = مبلغ این رسید: <b>${TW(total)}</b></p>`:`<p>مبلغ اصل قسط: <b>${TW(base)}</b>${received&&received!==base?` · جمع فیش‌ها: <b>${T(received)}</b>`:''}</p>`;
+  return `<div class=hd><span>شماره قرارداد: ${c.no}</span><span>تاریخ: ${F((i&&i.pdate)||todayJ())}</span></div><h4>رسید دریافت وجه</h4><p>از ${esc(cu.name)} (کد ملی ${F(cu.nid)}) بابت «${esc((i&&i.title)||'—')}» ${esc(unitTxt(c.proj,c.unit))} دریافت شد.${refs.length?` شماره پیگیری: ${F(refs.join('، '))}.`:''}</p>${payLines}${lateHtml}<p>وضعیت قسط: <b>${esc(i?instPayStatusLabel(i):'—')}</b></p><p>جمع اصل پرداختی تا این تاریخ: ${T(paidSum(c))} | مانده قرارداد: ${T(c.total-paidSum(c))}${lateSum(c)?` | جمع جریمه‌های وصول‌شده: ${T(lateSum(c))}`:''}</p>${sg([COMPANY,'تحویل‌گیرنده'])}`;
 };
 const schedDoc=(c,cu)=>{
   const rows=(c.inst||[]).map((i,k)=>{
     const pct=instLatePct(c,i);
-    const days=i.paid?(Number(i.lateDays)||0):Math.max(0,-diff(i.date));
-    const fee=i.paid?(Number(i.lateFee)||0):calcLateFee(i.amt,pct,days);
-    const status=i.paid?'پرداخت شد':(diff(i.date)<0?F(-diff(i.date))+' روز تأخیر':diff(i.date)===0?'سررسید امروز':F(diff(i.date))+' روز مانده');
-    const note=i.paid?lateDocLine({...i,_latePctUsed:pct}):(days&&pct?`تخمین: ${F(days)} روز × ${F(pct)}٪`:'');
-    return `<tr><td>${F(k+1)}</td><td>${esc(i.title||'قسط')}</td><td>${money(i.amt)}</td><td>${F(i.date)}</td><td>${status}</td><td>${i.paid?F(i.pdate||'—'):'—'}</td><td>${days?F(days):'—'}</td><td>${fee?money(fee):'—'}</td><td>${i.paid||fee?money(i.amt+fee):money(i.amt)}</td><td>${i.ref?F(i.ref):'—'}</td><td style="text-align:right;white-space:normal">${esc(note||'—')}</td></tr>`;
+    const paid=isInstPaid(i),partial=isInstPartial(i);
+    const days=paid?(Number(i.lateDays)||0):Math.max(0,-diff(i.date));
+    const fee=paid?(Number(i.lateFee)||0):calcLateFee(i.amt,pct,days);
+    const status=instPayStatusLabel(i);
+    const refs=instPays(i).map(p=>p.ref).filter(Boolean).join('، ')||i.ref||'';
+    const note=paid?lateDocLine({...i,_latePctUsed:pct}):partial?`پرداخت‌شده ${money(instReceived(i))} · مانده ${money(instRemain(i))}`:(days&&pct?`تخمین: ${F(days)} روز × ${F(pct)}٪`:'');
+    return `<tr><td>${F(k+1)}</td><td>${esc(i.title||'قسط')}</td><td>${money(i.amt)}</td><td>${F(i.date)}</td><td>${esc(status)}</td><td>${paid||partial?F(i.pdate||'—'):'—'}</td><td>${days?F(days):'—'}</td><td>${fee?money(fee):'—'}</td><td>${paid||fee?money(i.amt+fee):money(i.amt)}</td><td>${refs?F(refs):'—'}</td><td style="text-align:right;white-space:normal">${esc(note||'—')}</td></tr>`;
   }).join('');
+  const ist=instStats(c);
   return `<div class=hd><span>شماره قرارداد: ${c.no}</span><span>تاریخ چاپ: ${F(todayJ())}</span></div>
   <h4>جدول اقساط و پرداخت‌ها</h4>
   <p>خریدار: <b>${esc(cu.name)}</b> · کد ملی ${F(cu.nid)} · ${esc(unitTxt(c.proj,c.unit))}</p>
   <p>مبلغ کل قرارداد: <b>${T(c.total)}</b> · پرداخت اصل: <b>${T(paidSum(c))}</b> · مانده: <b>${T(Math.max(0,c.total-paidSum(c)))}</b>${lateSum(c)?` · جریمه وصول‌شده: <b>${T(lateSum(c))}</b>`:''}</p>
+  <p>اقساط: پرداخت‌شده <b>${F(ist.paid)}</b> از <b>${F(ist.total)}</b> · باقی‌مانده <b>${F(ist.unpaid+ist.partial)}</b></p>
   ${Number(c.latePctDaily)?`<p>نرخ پیش‌فرض جریمه دیرکرد: <b>${F(c.latePctDaily)}٪</b> از مبلغ هر قسط به‌ازای هر یک روز تأخیر از سررسید. فرمول: مبلغ قسط × نرخ٪ × تعداد روز تأخیر.</p>`:`<p class=fd>برای این قرارداد نرخ جریمه دیرکرد پیش‌فرض صفر است؛ در صورت تعریف روی قسط یا هنگام ثبت پرداخت اعمال می‌شود.</p>`}
   ${tbl(['ردیف','شرح','مبلغ اصل','سررسید','وضعیت','تاریخ پرداخت','روز تأخیر','جریمه','جمع','پیگیری','مستند جریمه'],rows)}
   ${sg([COMPANY,esc(cu.name)])}`;
 };
 function rstr(inp){if(!can('admin'))return toast('فقط مدیر می‌تواند بازیابی کند');const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const parsed=JSON.parse(r.result);const data=prepImport(parsed.data||parsed);if(!confirm('اطلاعات فعلی با فایل پشتیبان جایگزین شود؟'))return;applyState(data,S._v||0);save();render();toast('در حال بازیابی روی سرور…')}catch(e){toast('فایل پشتیبان معتبر نیست')}};r.readAsText(f);inp.value=''}
-function repV(){if(!can('rep')&&!can('admin'))return empty('به گزارش‌ها دسترسی ندارید');const lv=l=>Math.max(...[l.stage,...(l.h||[]).map(x=>x.s)].filter(s=>s<9).concat([0])),LL=S.leads,od=S.contracts.flatMap(c=>(c.inst||[]).filter(i=>!i.paid&&diff(i.date)<0)),ag=[[1,30],[31,60],[61,1e9]].map(([a,b])=>sum(od.filter(i=>{const d=-diff(i.date);return d>=a&&d<=b}),i=>i.amt)),rv=S.reservations,grp=(f)=>[...new Set(LL.map(f))].map(g=>{const a=LL.filter(l=>f(l)==g);return `<tr><td>${esc(g||'—')}</td><td>${F(a.length)}</td><td>${F(a.filter(l=>lv(l)>=8).length)}</td><td>${a.length?F(Math.round(a.filter(l=>lv(l)>=8).length/a.length*100))+'٪':'—'}</td></tr>`}).join('');
+function repV(){if(!can('rep')&&!can('admin'))return empty('به گزارش‌ها دسترسی ندارید');const lv=l=>Math.max(...[l.stage,...(l.h||[]).map(x=>x.s)].filter(s=>s<9).concat([0])),LL=S.leads,od=S.contracts.flatMap(c=>(c.inst||[]).filter(i=>!isInstPaid(i)&&diff(i.date)<0)),ag=[[1,30],[31,60],[61,1e9]].map(([a,b])=>sum(od.filter(i=>{const d=-diff(i.date);return d>=a&&d<=b}),i=>instRemain(i))),rv=S.reservations,grp=(f)=>[...new Set(LL.map(f))].map(g=>{const a=LL.filter(l=>f(l)==g);return `<tr><td>${esc(g||'—')}</td><td>${F(a.length)}</td><td>${F(a.filter(l=>lv(l)>=8).length)}</td><td>${a.length?F(Math.round(a.filter(l=>lv(l)>=8).length/a.length*100))+'٪':'—'}</td></tr>`}).join('');
  return `<div class=top><h2>گزارش‌ها و پشتیبان</h2><div>${can('admin')?`<button onclick="expData()">دانلود پشتیبان</button> <label class=sm style="display:inline-block;cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:2px 9px;width:auto">بازیابی از فایل<input type=file accept=.json,.JSON hidden onchange="rstr(this)"></label>`:'<span style="color:var(--mut);font-size:12px">پشتیبان فقط برای مدیر فعال است</span>'}</div></div>
- <div class=stats><div class=st><b>${money(sum(od,i=>i.amt))}</b><span>مطالبات معوق (تومان)</span></div><div class=st><b>${money(ag[0])}</b><span>معوق تا ۳۰ روز</span></div><div class=st><b>${money(ag[1])}</b><span>معوق ۳۱ تا ۶۰ روز</span></div><div class=st><b>${money(ag[2])}</b><span>معوق بیش از ۶۰ روز</span></div><div class=st><b>${money(sum(rv.filter(r=>r.st=='cancel'&&r.cancel),r=>r.cancel.fine||0))}</b><span>مبالغ کسرشده بابت لغو</span></div></div>
+ <div class=stats><div class=st><b>${money(sum(od,i=>instRemain(i)))}</b><span>مطالبات معوق (تومان)</span></div><div class=st><b>${money(ag[0])}</b><span>معوق تا ۳۰ روز</span></div><div class=st><b>${money(ag[1])}</b><span>معوق ۳۱ تا ۶۰ روز</span></div><div class=st><b>${money(ag[2])}</b><span>معوق بیش از ۶۰ روز</span></div><div class=st><b>${money(sum(rv.filter(r=>r.st=='cancel'&&r.cancel),r=>r.cancel.fine||0))}</b><span>مبالغ کسرشده بابت لغو</span></div></div>
  <h3>فروش و وصولی به تفکیک پروژه</h3>${S.projects.length?tbl(['پروژه','واحد','آزاد','رزرو','فروخته','ارزش فروش','وصول‌شده','مانده'],S.projects.map(p=>{const cs=S.contracts.filter(c=>c.proj==p.id);return `<tr><td>${esc(p.name)}</td><td>${F((p.units||[]).length)}</td><td>${F((p.units||[]).filter(u=>u.st=='free').length)}</td><td>${F((p.units||[]).filter(u=>u.st=='res').length)}</td><td>${F((p.units||[]).filter(u=>u.st=='sold').length)}</td><td>${money(sum(cs,c=>c.total))}</td><td>${money(sum(cs,paidSum))}</td><td>${money(sum(cs,c=>c.total-paidSum(c)))}</td></tr>`}).join('')):empty('پروژه‌ای ثبت نشده است.')}
  <h3>قیف فروش (تعداد سرنخی که به هر مرحله رسیده)</h3><div class=wrap style="padding:10px 14px">${LS.slice(0,9).map((s,i)=>{const n=LL.filter(l=>lv(l)>=i).length;return `<div style="display:flex;gap:10px;align-items:center;margin:4px 0"><span style="width:210px;flex:none">${s}</span><div style="flex:1;background:var(--in);border-radius:4px"><div style="width:${LL.length?n/LL.length*100:0}%;background:var(--acc);height:14px;border-radius:4px"></div></div><b style="width:36px">${F(n)}</b></div>`}).join('')||empty('سرنخی ثبت نشده است.')}</div>
  <h3>عملکرد منابع جذب</h3>${LL.length?tbl(['منبع','سرنخ','به قرارداد رسیده','نرخ تبدیل'],grp(l=>l.src)):empty('داده‌ای نیست.')}
@@ -2164,7 +3521,7 @@ function doc(){const back=V.k=='res'?'res':(V.k=='acct'||V.k=='checks')?'acct':'
  if(V.k=='p')return bar+`<div class=paper><h4>فرم اعلام پرداخت اقساط / بدهی</h4><p>آقای/خانم/شرکت: <b>${esc(cu.name)}</b> کد ملی: ${F(cu.nid)} شماره همراه: ${F(cu.phone)}</p>
   <p>اینجانب ${esc(cu.name)} فرزند ${esc(cu.father||'')} دارای کد ملی ${F(cu.nid)} در کمال صحت و سلامت عقلی اعلام می‌دارم در صورت احراز هرگونه مغایرت یا کشف فسادی در ارائه اطلاعات و اسناد (اصل و کپی) مربوط به پرداخت وجوه اقساط قرارداد ${c.no} مورخ ${F(c.date)}، متعهد به پرداخت دو برابر وجه کل قرارداد مذکور به ${PENALTY_TO} به عنوان وجه التزام می‌باشم و هرگونه ادعایی در این رابطه را از خود سلب و ساقط می‌نمایم.</p>
   ${Number(c.latePctDaily)?`<p class=fd>جریمه دیرکرد این قرارداد: ${F(c.latePctDaily)}٪ از مبلغ هر قسط به‌ازای هر روز تأخیر از سررسید.</p>`:''}
-  ${tbl(['ردیف','مبلغ اصل','جریمه','جمع','تاریخ قسط','تاریخ واریز','شماره پیگیری','توضیحات جریمه'],c.inst.map((i,k)=>{const fee=Number(i.lateFee)||0,pct=instLatePct(c,i);return `<tr><td>${F(k+1)}</td><td>${money(i.amt)}</td><td>${fee?money(fee):''}</td><td>${money(i.amt+fee)}</td><td>${F(i.date)}</td><td>${i.paid?F(i.pdate):''}</td><td>${i.ref?F(i.ref):''}</td><td style="white-space:normal;text-align:right">${esc(i.paid?lateDocLine({...i,_latePctUsed:pct}):'')}</td></tr>`}).join(''))}
+  ${tbl(['ردیف','مبلغ اصل','پرداخت‌شده','مانده','جریمه','جمع','تاریخ قسط','تاریخ واریز','شماره پیگیری','وضعیت / جریمه'],c.inst.map((i,k)=>{const fee=Number(i.lateFee)||0,pct=instLatePct(c,i),paid=isInstPaid(i),refs=(instPays(i).map(p=>p.ref).filter(Boolean).join('، '))||i.ref||'';return `<tr><td>${F(k+1)}</td><td>${money(i.amt)}</td><td>${instReceived(i)?money(instReceived(i)):''}</td><td>${paid?'':money(instRemain(i))}</td><td>${fee?money(fee):''}</td><td>${money((paid?i.amt:instReceived(i)||i.amt)+fee)}</td><td>${F(i.date)}</td><td>${paid||isInstPartial(i)?F(i.pdate||''):''}</td><td>${refs?F(refs):''}</td><td style="white-space:normal;text-align:right">${esc(paid?lateDocLine({...i,_latePctUsed:pct}):instPayStatusLabel(i))}</td></tr>`}).join(''))}
   <div class=pay-sign>
     <div class=pay-sign-box><span>امضا</span></div>
     <div class=pay-sign-box fp><span>اثر انگشت ۱</span></div>
@@ -2231,8 +3588,9 @@ function userForm(title,init,ok){
   m.querySelector('[name=role]').value=init.role||'staff';
   m.querySelector('[name=role]').onchange=e=>{
     const role=e.target.value;
-    const defs=LEGAL_OPTS.roleDefaults?.[role]||[];
-    m.querySelector('#permBox').outerHTML=permChecks(defs,role);
+    const cur=collectPerms(m);
+    const applyDefaults=!init.id||role==='admin'||confirm('دسترسی‌های پیش‌فرض این نقش اعمال شود؟\nانصراف = نگه داشتن تیک‌های فعلی');
+    m.querySelector('#permBox').outerHTML=permChecks(applyDefaults?(LEGAL_OPTS.roleDefaults?.[role]||[]):cur,role);
   };
   $('#ok').onclick=async()=>{
     const v={name:m.querySelector('[name=name]').value.trim(),username:m.querySelector('[name=username]').value.trim(),password:m.querySelector('[name=password]').value,role:m.querySelector('[name=role]').value,perms:collectPerms(m),unitIds:collectUnits(m)};
@@ -2603,23 +3961,36 @@ function prepImport(old){
   return data;
 }
 function offerLocalImport(){
-  if(sessionStorage.getItem('skipLocalImport'))return;
+  if(sessionStorage.getItem('skipLocalImport')||localStorage.getItem('armanCRM_migrated'))return;
+  // فقط وقتی سرور واقعاً خالی و نسخه ۰ است — وگرنه داده حذف‌شده از localStorage برنمی‌گردد
+  if((S._v||0)>0){
+    try{localStorage.removeItem('armanCRM')}catch(e){}
+    return;
+  }
   let old=null;
   try{const raw=localStorage.getItem('armanCRM');if(raw)old=JSON.parse(raw)}catch(e){return}
   if(!old)return;
   const has=(old.projects&&old.projects.length)||(old.customers&&old.customers.length)||(old.contracts&&old.contracts.length)||(old.reservations&&old.reservations.length)||(old.leads&&old.leads.length);
   const empty=!S.projects.length&&!S.customers.length&&!S.contracts.length&&!S.reservations.length&&!S.leads.length;
   if(!has||!empty)return;
-  $('#modal').innerHTML='<div class=box><h3 style="margin-top:0">داده‌های نسخه قبلی پیدا شد</h3><p>در این مرورگر اطلاعات سامانه قدیمی ذخیره شده است. می‌توانید همان را به پایگاه داده سرور منتقل کنید.</p><div class=act><button type=button class=pri id=doImport>انتقال به سرور</button><button type=button id=skipImport>بعداً</button></div></div>';
+  $('#modal').innerHTML='<div class=box><h3 style="margin-top:0">داده‌های نسخه قبلی پیدا شد</h3><p>در این مرورگر اطلاعات سامانه قدیمی (قبل از سرور) ذخیره شده است. فقط اگر پایگاه سرور خالی است منتقل کنید؛ در غیر این صورت ممکن است داده قدیمی ناخواسته برگردد.</p><div class=act><button type=button class=pri id=doImport>انتقال یک‌بار به سرور</button><button type=button id=skipImport>دیگر نشان نده</button></div></div>';
   $('#modal').classList.add('on');
-  $('#skipImport').onclick=()=>{sessionStorage.setItem('skipLocalImport','1');closeM()};
-  $('#doImport').onclick=()=>{
+  $('#skipImport').onclick=()=>{
+    sessionStorage.setItem('skipLocalImport','1');
+    try{localStorage.setItem('armanCRM_migrated','1');localStorage.removeItem('armanCRM')}catch(e){}
+    closeM();
+  };
+  $('#doImport').onclick=async()=>{
     const data=prepImport(old);
     applyState(data,S._v||0);
     closeM();
-    save();
     render();
     toast('در حال انتقال داده‌های قبلی به سرور…');
+    const ok=await save();
+    if(ok){
+      try{localStorage.setItem('armanCRM_migrated','1');localStorage.removeItem('armanCRM')}catch(e){}
+      toast('انتقال انجام شد');
+    }else toast('انتقال ناقص بود؛ وضعیت همگام‌سازی را ببینید');
   };
 }
 async function loadOptions(){

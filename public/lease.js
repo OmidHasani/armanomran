@@ -226,13 +226,13 @@ ${art9}
       qarzTotal: d.qarzTotal || 0,
       qarzPays: Array.isArray(d.qarzPays) && d.qarzPays.length ? d.qarzPays : [{ id: uid(), amt: 0, date: '', bank: '', ref: '' }],
       payDayLabel: parsePayDay(d.payDayLabel) || '',
-      coolDays: parseDays(d.coolDays, LEASE_PAY_DEFAULTS.coolDays),
-      qarzRefundCount: parseDays(d.qarzRefundCount, LEASE_PAY_DEFAULTS.qarzRefundCount),
-      payBank: d.payBank || LEASE_PAY_DEFAULTS.payBank,
-      payCard: d.payCard || LEASE_PAY_DEFAULTS.payCard,
-      paySheba: d.paySheba || LEASE_PAY_DEFAULTS.paySheba,
-      payAcct: d.payAcct || LEASE_PAY_DEFAULTS.payAcct,
-      payName: d.payName || LEASE_PAY_DEFAULTS.payName,
+      coolDays: d.coolDays != null && d.coolDays !== '' ? parseDays(d.coolDays, LEASE_PAY_DEFAULTS.coolDays) : (c.doc ? parseDays(d.coolDays, 0) : LEASE_PAY_DEFAULTS.coolDays),
+      qarzRefundCount: d.qarzRefundCount != null && d.qarzRefundCount !== '' ? parseDays(d.qarzRefundCount, LEASE_PAY_DEFAULTS.qarzRefundCount) : (c.doc ? parseDays(d.qarzRefundCount, 0) : LEASE_PAY_DEFAULTS.qarzRefundCount),
+      payBank: d.payBank ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.payBank),
+      payCard: d.payCard ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.payCard),
+      paySheba: d.paySheba ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.paySheba),
+      payAcct: d.payAcct ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.payAcct),
+      payName: d.payName ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.payName),
     };
   }
 

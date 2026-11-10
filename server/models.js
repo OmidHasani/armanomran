@@ -23,6 +23,16 @@ const unitSchema = new Schema({
   storageArea: { type: Number, default: 0 },
   handReady: { type: Boolean, default: false },
   handDate: { type: String, default: '' },
+  dangSplit: { type: Boolean, default: false },
+  owners: {
+    type: [{
+      id: { type: String, required: true },
+      custId: { type: String, required: true },
+      dang: { type: Number, required: true },
+      note: { type: String, default: '' },
+    }],
+    default: [],
+  },
 }, { _id: false });
 
 const projectSchema = new Schema({
@@ -60,6 +70,15 @@ const customerSchema = new Schema({
 customerSchema.index({ nid: 1 }, { unique: true });
 customerSchema.index({ phone: 1 });
 
+const instPaySchema = new Schema({
+  id: { type: String, required: true },
+  amt: { type: Number, required: true },
+  date: { type: String, required: true },
+  ref: { type: String, default: '' },
+  note: { type: String, default: '' },
+  overFrom: { type: String, default: '' },
+}, { _id: false });
+
 const instSchema = new Schema({
   id: { type: String, required: true },
   title: { type: String, default: '' },
@@ -69,6 +88,10 @@ const instSchema = new Schema({
   pdate: { type: String, default: '' },
   ref: { type: String, default: '' },
   kind: { type: String, default: '' },
+  fromPayId: { type: String, default: '' },
+  payer: { type: String, default: '' },
+  acct: { type: String, default: '' },
+  pays: { type: [instPaySchema], default: [] },
   latePctDaily: { type: Number, default: undefined },
   lateDays: { type: Number, default: 0 },
   lateCalc: { type: Number, default: 0 },
@@ -140,6 +163,7 @@ const contractSchema = new Schema({
   note: { type: String, default: '' },
   latePctDaily: { type: Number, default: 0 },
   auto: Boolean,
+  resId: { type: String, default: '' },
   inst: { type: [instSchema], default: [] },
   fac: { type: [facSchema], default: undefined },
   hand: { type: String, default: '' },
@@ -151,6 +175,7 @@ const contractSchema = new Schema({
 contractSchema.index({ no: 1 }, { unique: true });
 contractSchema.index({ cust: 1 });
 contractSchema.index({ proj: 1, unit: 1 });
+contractSchema.index({ resId: 1 });
 
 const paySchema = new Schema({
   id: { type: String, required: true },

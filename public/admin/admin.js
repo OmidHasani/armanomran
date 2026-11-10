@@ -408,7 +408,9 @@ function userForm(init) {
   const box = $('#modal .drawer');
   box.querySelector('[name=role]').onchange = (e) => {
     const role = e.target.value;
-    box.querySelector('#permBox').outerHTML = permChecks(ROLE_DEFAULTS[role] || [], role);
+    const cur = $$('#permBox [data-p]:checked').map((el) => el.dataset.p);
+    const applyDefaults = !editing || role === 'admin' || confirm('دسترسی‌های پیش‌فرض این نقش اعمال شود؟\nانصراف = نگه داشتن تیک‌های فعلی');
+    box.querySelector('#permBox').outerHTML = permChecks(applyDefaults ? (ROLE_DEFAULTS[role] || []) : cur, role);
   };
   $('#cancel').onclick = closeModal;
   $('#ok').onclick = async () => {

@@ -208,15 +208,15 @@ ${art6}
       floor: d.floor || u.floor || '',
       block: d.block || '',
       payDayLabel: parsePayDay(d.payDayLabel) || '',
-      coolDays: parseDays(d.coolDays, PAY_DEFAULTS.coolDays),
+      coolDays: d.coolDays != null && d.coolDays !== '' ? parseDays(d.coolDays, PAY_DEFAULTS.coolDays) : (c.doc ? parseDays(d.coolDays, 0) : PAY_DEFAULTS.coolDays),
       chequeNo: d.chequeNo || defaultChequeNo(c),
-      delayFineDaily: d.delayFineDaily || PAY_DEFAULTS.delayFineDaily,
-      delayExtraDays: parseDays(d.delayExtraDays, PAY_DEFAULTS.delayExtraDays),
-      payBank: d.payBank || PAY_DEFAULTS.payBank,
-      payCard: d.payCard || PAY_DEFAULTS.payCard,
-      paySheba: d.paySheba || PAY_DEFAULTS.paySheba,
-      payAcct: d.payAcct || PAY_DEFAULTS.payAcct,
-      payName: d.payName || PAY_DEFAULTS.payName,
+      delayFineDaily: d.delayFineDaily != null && d.delayFineDaily !== '' ? d.delayFineDaily : (c.doc ? (d.delayFineDaily ?? 0) : PAY_DEFAULTS.delayFineDaily),
+      delayExtraDays: d.delayExtraDays != null && d.delayExtraDays !== '' ? parseDays(d.delayExtraDays, PAY_DEFAULTS.delayExtraDays) : (c.doc ? parseDays(d.delayExtraDays, 0) : PAY_DEFAULTS.delayExtraDays),
+      payBank: d.payBank ?? (c.doc ? '' : PAY_DEFAULTS.payBank),
+      payCard: d.payCard ?? (c.doc ? '' : PAY_DEFAULTS.payCard),
+      paySheba: d.paySheba ?? (c.doc ? '' : PAY_DEFAULTS.paySheba),
+      payAcct: d.payAcct ?? (c.doc ? '' : PAY_DEFAULTS.payAcct),
+      payName: d.payName ?? (c.doc ? '' : PAY_DEFAULTS.payName),
     };
   }
 
