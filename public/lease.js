@@ -249,14 +249,15 @@ ${art9}
       const box = m.querySelector('#qarzBox');
       if (!box) return;
       box.innerHTML = init.qarzPays.map((row, i) => `<div class="qarz-row" data-i="${i}">
-      <label>مبلغ (تومان)<input data-k="amt" inputmode="numeric" value="${esc(row.amt ? money(row.amt) : '')}"></label>
+      <label>مبلغ (تومان)<input data-k="amt" data-money inputmode="numeric" value="${esc(row.amt ? money(row.amt) : '')}"></label>
       <label>تاریخ واریز<input data-k="date" readonly style="cursor:pointer" value="${row.date ? F(row.date) : ''}" placeholder="انتخاب از تقویم"></label>
       <label>بانک<input data-k="bank" value="${esc(row.bank || '')}"></label>
       <label>شماره پیگیری<input data-k="ref" value="${esc(row.ref || '')}"></label>
       <button type="button" class="sm x" data-del="${i}">حذف</button>
     </div>`).join('');
       box.querySelectorAll('[data-k=amt]').forEach((el) => {
-        el.oninput = () => { const v = Math.round(num(el.value)); el.value = v ? F(v.toLocaleString('en')) : ''; };
+        el.oninput = () => { fmtMoney(el); };
+        paintMoneyWords(el);
       });
       box.querySelectorAll('[data-k=date]').forEach((el) => bindDate(el));
       box.querySelectorAll('[data-del]').forEach((btn) => {
@@ -326,7 +327,7 @@ ${art9}
     <div class=lease-sec>
       <h4>۴. قرض‌الحسنه</h4>
       <div class=grid>
-        <label>جمع قرض‌الحسنه (تومان) – خالی = جمع ردیف‌ها<input name=qarzTotal inputmode=numeric></label>
+        <label>جمع قرض‌الحسنه (تومان) – خالی = جمع ردیف‌ها<input name=qarzTotal data-money inputmode=numeric></label>
       </div>
       <div id=qarzBox class=qarz-box></div>
       <button type=button class="sm btn-soft" id=addQarz><span class=plus>+</span> ردیف واریز</button>
@@ -356,7 +357,8 @@ ${art9}
     set('qarzRefundCount', init.qarzRefundCount ? F(init.qarzRefundCount) : '');
     set('payBank', init.payBank); set('payCard', init.payCard); set('paySheba', init.paySheba); set('payAcct', init.payAcct); set('payName', init.payName);
     m.querySelector('[name=qarzTotal]').value = init.qarzTotal ? money(init.qarzTotal) : '';
-    m.querySelector('[name=qarzTotal]').oninput = function () { fmtIn(this); };
+    m.querySelector('[name=qarzTotal]').oninput = function () { fmtMoney(this); };
+    paintMoneyWords(m.querySelector('[name=qarzTotal]'));
     ['birth', 'start', 'end', 'handDate'].forEach((k) => {
       const e = m.querySelector(`[name=${k}]`);
       e.value = init[k] ? F(init[k]) : '';

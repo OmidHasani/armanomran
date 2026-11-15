@@ -47,6 +47,16 @@ const U1=['','یک','دو','سه','چهار','پنج','شش','هفت','هشت','
 function w3(n){const p=[];if(n>=100)p.push(H1[~~(n/100)]);n%=100;if(n>=20){p.push(T1[~~(n/10)]);if(n%10)p.push(U1[n%10])}else if(n)p.push(U1[n]);return p.join(' و ')}
 function words(n){n=Math.round(n);if(!n)return 'صفر';const g=[];let i=0;while(n){const r=n%1000;if(r)g.unshift(w3(r)+(B1[i]?' '+B1[i]:''));n=~~(n/1000);i++}return g.join(' و ')}
 const TW=n=>`${T(n)} (${words(n)} تومان)`;
+/** معادل حروفی مبلغ برای راهنمای زیر فیلدهای پولی */
+function moneyWordsText(n){n=Math.round(Number(n)||0);return n?words(n)+' تومان':''}
+function paintMoneyWords(el){
+  if(!el||!el.parentElement)return;
+  let h=el.parentElement.querySelector(':scope > .money-words');
+  if(!h){h=document.createElement('small');h.className='money-words';el.insertAdjacentElement('afterend',h)}
+  const t=moneyWordsText(num(el.value));
+  h.textContent=t;h.hidden=!t;
+}
+function refreshMoneyWords(root){(root||document).querySelectorAll('input[data-money]').forEach(paintMoneyWords)}
 // تاریخ شمسی
 function j2g(jy,jm,jd){jy+=1595;let days=-355668+365*jy+~~(jy/33)*8+~~((jy%33+3)/4)+jd+(jm<7?(jm-1)*31:(jm-7)*30+186),gy=400*~~(days/146097);days%=146097;if(days>36524){gy+=100*~~(--days/36524);days%=36524;if(days>=365)days++}gy+=4*~~(days/1461);days%=1461;if(days>365){gy+=~~((days-1)/365);days=(days-1)%365}let gd=days+1,sa=[0,31,(gy%4==0&&gy%100!=0)||gy%400==0?29:28,31,30,31,30,31,31,30,31,30,31],gm;for(gm=0;gm<13;gm++){if(gd<=sa[gm])break;gd-=sa[gm]}return[gy,gm,gd]}
 const pj=s=>N(s).replace(/-/g,'/').split('/').map(Number);
@@ -506,10 +516,11 @@ function render(){const nav=firstNav(),act={cv:'cust',rep:'rep',rd:'res',pd:'pro
  if(foot)foot.innerHTML=`<div class=who>${esc(ME.name||ME.username||'')}<small style="display:block;color:var(--mut);font-weight:400">${esc(roleLabel(ME.role))}</small></div><div class=sidebtns>${can('admin')?`<a class=sm href="/admin" style="display:inline-flex;align-items:center;text-decoration:none">مدیریت</a>`:''}<button type=button class=sm onclick="chPass()">رمز</button><button type=button class=sm onclick="logout()">خروج</button></div><div id=sync class=sync></div>`;
  const views={dash,lead:leadV,proj:projV,pd,cust:custV,cont,cd,res,rd,doc,rep:repV,cv:cuV,admin:()=>{location.href='/admin';return empty('در حال انتقال به پنل مدیریت…')},legal:legalV,ld:legalDetail,inbox:inboxV,wd:workDetail,lv:leadDetail,acct:typeof acctV==='function'?acctV:()=>empty('ماژول حسابداری بارگذاری نشده'),ad:typeof ad==='function'?ad:()=>empty('ماژول حسابداری بارگذاری نشده')};
  const view=views[V.n];
- $('#main').innerHTML=view?view():empty('به این بخش دسترسی ندارید');
- if(V.n=='doc'){const p=$('.paper'),o=docObj();if(p){const editable=V.k!=='acct'&&V.k!=='checks'&&!!can('write');p.contentEditable=editable;const k=edKey();if(editable&&o&&o.ed&&o.ed[k])p.innerHTML=o.ed[k];
+  $('#main').innerHTML=view?view():empty('به این بخش دسترسی ندارید');
+  refreshMoneyWords($('#main'));
+  if(V.n=='doc'){const p=$('.paper'),o=docObj();if(p){const editable=V.k!=='acct'&&V.k!=='checks'&&!!can('write');p.contentEditable=editable;const k=edKey();if(editable&&o&&o.ed&&o.ed[k])p.innerHTML=o.ed[k];
   if(p.classList.contains('legal')&&typeof fitLegalPages==='function'){requestAnimationFrame(()=>{fitLegalPages(p);if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>fitLegalPages(p))})}}}
- setSync(syncText)}
+  setSync(syncText)}
 function cboxOptParts(label){
   const s=String(label||'');
   const i=s.indexOf(' – ');
@@ -666,7 +677,7 @@ function form(title,fields,init,ok){const m=$('#modal');init=init||{};
   if(f.t==='check')return `<span class=chkline><input type=checkbox name=${f.k} ${f.d?'checked':''}> ${f.l}</span>`;
   if(f.t==='select')return `<select name=${f.k}>${(f.o||[]).map(o=>`<option value="${esc(o[0])}">${esc(o[1])}</option>`).join('')}</select>`;
   if(f.t==='area')return `<textarea name=${f.k} rows=2></textarea>`;
-  return `<input name=${f.k} ${f.t=='pass'?'type=password autocomplete=new-password':''} placeholder="${f.p||''}" ${f.t=='money'?'inputmode=numeric':''} ${f.ro?'readonly':''}>`;
+  return `<input name=${f.k} ${f.t=='pass'?'type=password autocomplete=new-password':''} placeholder="${f.p||''}" ${f.t=='money'?'inputmode=numeric data-money':''} ${f.ro?'readonly':''}>`;
  };
  m.innerHTML=`<div class="box ${init._boxClass||''}"><h3 style="margin-top:0">${title}</h3><div class=grid>${fields.map(f=>{
   if(f.skipRender)return '';
@@ -685,10 +696,11 @@ function form(title,fields,init,ok){const m=$('#modal');init=init||{};
   e.value=f.t=='money'?fm(v):f.j?F(v):v;
   if(f.t==='search')syncCbox(e);
   if(f.j){e.readOnly=true;e.style.cursor='pointer';e.onclick=()=>dpick(e)}
-  if(f.t=='money')e.oninput=()=>{e.value=fm(num(e.value));if(f.on)f.on(m,0)};
+  if(f.t=='money'){e.oninput=()=>{e.value=fm(num(e.value));paintMoneyWords(e);if(f.on)f.on(m,0)};paintMoneyWords(e)}
   if(f.on&&f.t!=='money'){e.onchange=()=>f.on(m,0);f.on(m,1)}
   else if(f.on&&f.t=='money')f.on(m,1);
  });
+ refreshMoneyWords(m);
  $('#ok').onclick=async()=>{const v={};for(const f of fields){
   if(f.t==='html'||f.skip||!f.k)continue;
   const e=el(f.k);if(!e)continue;
@@ -754,6 +766,7 @@ const grq=(t,f)=>{const r=dueList().filter(f);if(!r.length)return '';
   </article>`;
  }).join('')}</div></section>`};
 const fmtIn=e=>{const v=Math.round(num(e.value));e.value=v?F(v.toLocaleString('en')).replace(/,/g,'٬'):''};
+const fmtMoney=e=>{fmtIn(e);paintMoneyWords(e)};
 const setAuto=(id,v)=>{const c=S.contracts.find(x=>x.id==id);if(!c)return;c.auto=v;save();toast(v?'محاسبه خودکار روشن شد':'محاسبه خودکار خاموش شد')};
 function redist(c,ch){
   const o=(c.inst||[]).filter(x=>x!==ch&&!isInstPaid(x)&&!isInstPartial(x));
@@ -906,7 +919,7 @@ function setDay(id){
     c.inst.sort((a,b)=>a.date<b.date?-1:1);save();render();
   });
 }
-const setM=(m,k,v)=>{const e=m.querySelector(`[name=${k}]`);e.value=v?F((+v).toLocaleString('en')).replace(/,/g,'٬'):''};
+const setM=(m,k,v)=>{const e=m.querySelector(`[name=${k}]`);if(!e)return;e.value=v?F((+v).toLocaleString('en')).replace(/,/g,'٬'):'';if(e.dataset.money!=null)paintMoneyWords(e)};
 // داشبورد
 function dueList(){const L=[],legalDays=Math.max(1,Number(S.cfg?.legalDays)||7);
  S.contracts.forEach(c=>(c.inst||[]).forEach(i=>{if(!isInstPaid(i)){const d=diff(i.date);if(d<=7||d<=-legalDays)L.push({d,k:'قسط',who:cust(c.cust).name,ph:cust(c.cust).phone,pid:i.id,cid:c.id,legal:d<=-legalDays,desc:`${c.no} – ${i.title}`,amt:instRemain(i),date:i.date,go:`go('cd','${c.id}')`})}}));
@@ -997,18 +1010,59 @@ function dangSummaryHtml(owners){
   const used=dangSum(owners),rem=dangRemain(owners);
   return `<div class=dang-sum>تخصیص‌شده <b>${F(used)}</b> از ${F(DANG_MAX)} دانگ · مانده <b>${F(rem)}</b> دانگ آزاد/شرکت</div>`;
 }
-function unitOwnersViewHtml(u){
-  if(!u.dangSplit)return '';
+function unitOwnersViewHtml(u,opts){
+  if(!u||!u.dangSplit)return '';
+  opts=opts||{};
   const owners=u.owners||[];
   const rem=dangRemain(owners);
+  const primaryId=opts.primaryCustId||'';
   const rows=owners.length?owners.map(o=>{
     const c=cust(o.custId);
-    return `<li><b>${esc(c.name||'—')}</b> · ${F(o.dang)} دانگ${o.note?` <span class=fd>(${esc(o.note)})</span>`:''}</li>`;
-  }).join(''):'<li class=fd>هنوز مالکی ثبت نشده</li>';
-  return `<div class="dang-view span2">
-    <div class=dang-view-h><span class="badge warn">تقسیط دانگی</span>${dangSummaryHtml(owners)}</div>
-    <ul class=dang-list>${rows}${rem>0?`<li class=fd>${F(rem)} دانگ آزاد / شرکت</li>`:''}</ul>
+    const av=(c.name||'؟').trim().charAt(0);
+    const isPrimary=primaryId&&o.custId===primaryId;
+    return `<div class="dang-person${isPrimary?' is-primary':''}">
+      <div class=av aria-hidden=true>${esc(av)}</div>
+      <div class=dang-person-meta>
+        <b>${esc(c.name||'—')}</b>
+        <span>${isPrimary?'خریدار اصلی قرارداد':(c.phone?F(c.phone):'شریک دانگی')}${o.note?` · ${esc(o.note)}`:''}</span>
+      </div>
+      <strong>${F(o.dang)} <em>دانگ</em></strong>
+      ${c.id?`<button type=button class="sm btn-soft" onclick="event.stopPropagation();go('cv','${c.id}')">مشتری</button>`:''}
+    </div>`;
+  }).join(''):`<p class=fd style="margin:0">هنوز مالکی برای دانگ‌ها ثبت نشده است.</p>`;
+  return `<div class="dang-card${opts.compact?' is-compact':''}">
+    <div class=dang-card-h>
+      <div>
+        <span class=dang-card-k>تقسیط دانگ</span>
+        <p class=fd style="margin:2px 0 0">یک قرارداد برای کل واحد · شرکا به‌صورت جدا در مشتریان ثبت می‌شوند</p>
+      </div>
+      <span class="badge warn">${F(owners.length)} شریک</span>
+    </div>
+    <div class=dang-people>${rows}</div>
+    <div class=dang-remain>
+      <span>مجموع دانگ باقیمانده واحد</span>
+      <b>${F(rem)}</b>
+    </div>
   </div>`;
+}
+function contractByUnit(projId,unitId){
+  return (S.contracts||[]).find(c=>c.proj===projId&&c.unit===unitId)||null;
+}
+function contractsViaDang(custId){
+  const out=[];
+  const seen=new Set();
+  custDangShares(custId).forEach(s=>{
+    const c=contractByUnit(s.proj.id,s.unit.id);
+    if(c&&!seen.has(c.id)){seen.add(c.id);out.push({contract:c,share:s})}
+  });
+  return out;
+}
+function dangOwnersLine(u){
+  if(!u||!u.dangSplit)return '';
+  return (u.owners||[]).map(o=>{
+    const c=cust(o.custId);
+    return `${c.name||'—'} : ${F(o.dang)} دانگ`;
+  }).join(' ، ');
 }
 function unitOwnersPanelHtml(){
   const d=UNIT_OWNERS_DRAFT||{dangSplit:false,owners:[]};
@@ -1224,15 +1278,15 @@ function unitCardHtml(u){
         <div class="uc-price-block span2">
           <div class=uc-price-h>قیمت خام شرکتی <small>یکی از متری یا کل کافی است</small></div>
           <div class=uc-price-row>
-            <label>قیمت هر متر<input id=ue_ppmRaw inputmode=numeric value="${esc(money(u.ppmRaw||0))}" oninput="fmtIn(this);syncUnitEditTotals('raw','ppm')"></label>
-            <label>قیمت کل<input id=ue_totalRaw inputmode=numeric value="${esc(money(u.totalRaw||0))}" oninput="fmtIn(this);syncUnitEditTotals('raw','total')"></label>
+            <label>قیمت هر متر<input id=ue_ppmRaw data-money inputmode=numeric value="${esc(money(u.ppmRaw||0))}" oninput="fmtMoney(this);syncUnitEditTotals('raw','ppm')"></label>
+            <label>قیمت کل<input id=ue_totalRaw data-money inputmode=numeric value="${esc(money(u.totalRaw||0))}" oninput="fmtMoney(this);syncUnitEditTotals('raw','total')"></label>
           </div>
         </div>
         <div class="uc-price-block span2">
           <div class=uc-price-h>قیمت تکمیل‌شده <small>یکی از متری یا کل کافی است</small></div>
           <div class=uc-price-row>
-            <label>قیمت هر متر<input id=ue_ppm inputmode=numeric value="${esc(money(u.ppm))}" oninput="fmtIn(this);syncUnitEditTotals('fin','ppm')"></label>
-            <label>قیمت کل<input id=ue_total inputmode=numeric value="${esc(money(u.total))}" oninput="fmtIn(this);syncUnitEditTotals('fin','total')"></label>
+            <label>قیمت هر متر<input id=ue_ppm data-money inputmode=numeric value="${esc(money(u.ppm))}" oninput="fmtMoney(this);syncUnitEditTotals('fin','ppm')"></label>
+            <label>قیمت کل<input id=ue_total data-money inputmode=numeric value="${esc(money(u.total))}" oninput="fmtMoney(this);syncUnitEditTotals('fin','total')"></label>
           </div>
         </div>
         <label class=span2 style="display:flex;gap:8px;align-items:center"><input id=ue_parking type=checkbox style="width:auto" ${u.parking||u.parkingCount?'checked':''} onchange="toggleUnitExtra('park',this.checked)"> پارکینگ دارد</label>
@@ -1277,7 +1331,7 @@ function unitCardHtml(u){
         <span>تکمیل‌شده</span>
         <strong>${(num(u.total)||num(u.ppm))?`${money(u.ppm||0)} /م² · <b class=uc-price>${money(u.total||0)} تومان</b>`:'—'}</strong>
       </div>
-      ${unitOwnersViewHtml(u)}
+      ${unitOwnersViewHtml(u,{compact:1,primaryCustId:(contractByUnit(V.id,u.id)||{}).cust})}
     </div>
   </article>`;
 }
@@ -1401,8 +1455,8 @@ function syncUnitEditTotals(pair,src){
   const totEl=$(pair==='raw'?'#ue_totalRaw':'#ue_total');
   if(!ppmEl||!totEl)return;
   const ppm=num(ppmEl.value),total=num(totEl.value);
-  if(src==='ppm'&&area)totEl.value=F(Math.round(area*ppm).toLocaleString('en'));
-  if(src==='total'&&area)ppmEl.value=F(Math.round(total/area).toLocaleString('en'));
+  if(src==='ppm'&&area){totEl.value=F(Math.round(area*ppm).toLocaleString('en'));paintMoneyWords(totEl)}
+  if(src==='total'&&area){ppmEl.value=F(Math.round(total/area).toLocaleString('en'));paintMoneyWords(ppmEl)}
 }
 function readUnitExtraFromForm(v){
   const parking=v.parking==='1'||v.parking===true;
@@ -1769,6 +1823,7 @@ function onInlineUnitMeasure(m,src){
     const e=m.querySelector(`[name=${k}]`);
     if(!e)return;
     e.value=val?F(Math.round(val).toLocaleString('en')).replace(/,/g,'٬'):'';
+    if(e.dataset.money!=null)paintMoneyWords(e);
   };
   if(src==='ppm'||src==='total'){
     const ppm=num(m.querySelector('[name=u_ppm]')?.value),total=num(m.querySelector('[name=u_total]')?.value);
@@ -1997,11 +2052,14 @@ function cont(){
     const nextDiff=next?diff(next.date):null;
     const nextTone=nextDiff==null?'':nextDiff<0?'is-late':nextDiff<=7?'is-soon':'';
     const nextHint=nextDiff==null?'':nextDiff<0?`${F(-nextDiff)} روز گذشته`:nextDiff===0?'امروز':`${F(nextDiff)} روز مانده`;
-    return `<article class="cc tone-${st.k}" data-s="${esc(N(c.no+cu.name+cu.phone+unitTxt(c.proj,c.unit)+typeName(c.type)))}" onclick="go('cd','${c.id}')">
+    const uu=unitOf(c.proj,c.unit);
+    const dangLine=dangOwnersLine(uu);
+    return `<article class="cc tone-${st.k}" data-s="${esc(N(c.no+cu.name+cu.phone+unitTxt(c.proj,c.unit)+typeName(c.type)+(dangLine||'')))}" onclick="go('cd','${c.id}')">
       <header class=cc-head>
         <div class=cc-id>
           <span class=cc-no>${esc(c.no)}</span>
           <span class="tag-st ${st.k}">${esc(st.l)}</span>
+          ${uu.dangSplit?`<span class="badge warn">تقسیط دانگی</span>`:''}
         </div>
         <span class=cc-type title="${esc(typeName(c.type))}">${esc(typeName(c.type))}</span>
       </header>
@@ -2013,6 +2071,7 @@ function cont(){
           <span>${F(c.date)}</span>
           ${cu.phone?`<span class=cc-dot></span><span class=cc-phone>${F(cu.phone)}</span>`:''}
         </p>
+        ${dangLine?`<p class=cc-dang>${esc(dangLine)} · مانده ${F(dangRemain(uu.owners))} دانگ</p>`:''}
       </div>
       <div class=cc-money>
         <div class=cc-stat>
@@ -2105,13 +2164,14 @@ function contractPriceSummaryHtml(r){
   return `<div class=cprice-sum>${rows.join('')}</div>`;
 }
 function inlineDangConfirmHtml(parsedUnit){
-  if(parsedUnit?.mode!=='new'||!parsedUnit.draft?.dangSplit)return '';
-  const owners=parsedUnit.draft.owners||[];
-  const names=owners.map(o=>{
-    const c=cust(o.custId);
-    return `${esc(c.name||'—')} (${F(o.dang)} دانگ)`;
-  }).join('، ');
-  return `<p class=fd><span class="badge warn">تقسیط دانگی</span> ${F(dangSum(owners))} از ${F(DANG_MAX)} دانگ${names?` · ${names}`:''}${dangRemain(owners)>0?` · مانده آزاد ${F(dangRemain(owners))}`:''}</p>`;
+  let u=null;
+  if(parsedUnit?.mode==='new'&&parsedUnit.draft?.dangSplit)u=parsedUnit.draft;
+  else if(parsedUnit?.mode==='sel'){
+    const found=unitOf(parsedUnit.projId,parsedUnit.unitId);
+    if(found?.dangSplit)u=found;
+  }
+  if(!u?.dangSplit)return '';
+  return `<div style="margin:8px 0 0">${unitOwnersViewHtml(u,{compact:1})}</div>`;
 }
 function addC(pre){pre=pre||{};
  if(pre.resId)return convertReservation(pre.resId);
@@ -2156,6 +2216,13 @@ function addC(pre){pre=pre||{};
  const parsedUnit=parseFormUnit(v);if(!parsedUnit)return false;
  if(parsedUnit.mode==='sel'){
    const u=unitOf(parsedUnit.projId,parsedUnit.unitId);
+   const existing=contractByUnit(parsedUnit.projId,parsedUnit.unitId);
+   if(existing&&!(pre.unit&&pre.unit===parsedUnit.projId+'|'+parsedUnit.unitId)){
+     toast(u.dangSplit
+       ?`این واحد قرارداد ${existing.no} دارد. تقسیط دانگی روی همان یک قرارداد ثبت می‌شود`
+       :`این واحد قرارداد ${existing.no} دارد و آزاد نیست`);
+     return false;
+   }
    if(u.st&&u.st!=='free'&&!(pre.unit&&pre.unit===parsedUnit.projId+'|'+parsedUnit.unitId)){
      toast('این واحد دیگر آزاد نیست');return false;
    }
@@ -2209,7 +2276,7 @@ function instCardHtml(c,i){
     return `<article class="ic edit">
       <div class=uc-edit-grid>
         <label class=span2>شرح قسط<input id=ie_title value="${esc(i.title||'')}"></label>
-        <label>مبلغ<input id=ie_amt inputmode=numeric value="${esc(money(i.amt))}" oninput="fmtIn(this)"></label>
+        <label>مبلغ<input id=ie_amt data-money inputmode=numeric value="${esc(money(i.amt))}" oninput="fmtMoney(this)"></label>
         <label>سررسید<input id=ie_date readonly style="cursor:pointer" value="${F(i.date)}" onclick="dpick(this)"></label>
         <label>جریمه دیرکرد روزانه (٪)<input id=ie_latepct inputmode=decimal placeholder="خالی = ${F(c.latePctDaily||0)}٪ قرارداد" value="${ownPct?esc(F(String(i.latePctDaily))):''}"></label>
         <label class=span2 style="display:flex;gap:8px;align-items:center"><input id=ie_lump type=checkbox style="width:auto" ${i.kind==='lump'||(typeof isLumpInst==='function'&&isLumpInst(i))?'checked':''}> الباقی نقدی (بند پایانی ماده ۵ قرارداد اجاره)</label>
@@ -2335,6 +2402,7 @@ function cd(){
         </dl>
       </section>
     </div>
+    ${u.dangSplit?`<section class="file-sec dang-sec">${unitOwnersViewHtml(u,{primaryCustId:c.cust})}</section>`:''}
   </article>
 
   <section class="units-panel noprint">
@@ -2422,7 +2490,7 @@ function openPayModal(id,opts){
     const over=!!p.overFrom;
     return `<div class=ipay-row data-id="${esc(p.id)}" data-over-from="${esc(p.overFrom||'')}">
     <div class=ipay-main>
-      <label>مبلغ<input data-k=amt inputmode=numeric value="${esc(p.amt?money(p.amt):'')}" placeholder="۰" ${over?'readonly':''}></label>
+      <label>مبلغ<input data-k=amt data-money inputmode=numeric value="${esc(p.amt?money(p.amt):'')}" placeholder="۰" ${over?'readonly':''}></label>
       <label>تاریخ<input data-k=date readonly style="cursor:pointer" value="${F(p.date||todayJ())}"></label>
       <label>شماره پیگیری<input data-k=ref value="${esc(over?'':(p.ref||''))}" placeholder="${over?'— کسر مازاد —':'فیش / پیگیری'}" ${over?'readonly':''}></label>
       <button type=button class="icon-btn ipay-del" title="حذف این پرداخت" aria-label="حذف">×</button>
@@ -2443,7 +2511,8 @@ function openPayModal(id,opts){
     const fEl=m.querySelector('[name=lateFee]'),nEl=m.querySelector('[name=lateNote]');
     const lateBox=m.querySelector('#lateBox');
     if(lateBox)lateBox.hidden=!done;
-    if(done&&fEl&&fEl.dataset.touched!=='1')fEl.value=calc?F(calc.toLocaleString('en')):'0';
+    if(done&&fEl&&fEl.dataset.touched!=='1'){fEl.value=calc?F(calc.toLocaleString('en')):'0';paintMoneyWords(fEl)}
+    else if(fEl)paintMoneyWords(fEl);
     const fee=done?num(fEl?.value):0;
     const sumEl=m.querySelector('#paySum');
     if(sumEl)sumEl.innerHTML=`
@@ -2475,14 +2544,14 @@ function openPayModal(id,opts){
       const ref=row.querySelector('[data-k=ref]');
       const note=row.querySelector('[data-k=note]');
       const del=row.querySelector('.ipay-del');
-      if(amt){amt.oninput=()=>{fmtIn(amt);paint()}}
+      if(amt){amt.oninput=()=>{fmtMoney(amt);paint()};paintMoneyWords(amt)}
       if(date)date.onclick=()=>dpick(date,()=>{m.querySelector('[name=lateFee]')&&(m.querySelector('[name=lateFee]').dataset.touched='');paint()});
       if(ref)ref.oninput=paint;
       if(note)note.oninput=paint;
       if(del)del.onclick=()=>{
         const list=m.querySelector('#payRows');
         if(list.querySelectorAll('.ipay-row').length<=1){
-          amt.value='';ref.value='';note.value='';paint();return;
+          amt.value='';ref.value='';note.value='';paintMoneyWords(amt);paint();return;
         }
         row.remove();paint();
       };
@@ -2499,7 +2568,7 @@ function openPayModal(id,opts){
     <div id=payRows class=ipay-list>${rows.map(rowHtml).join('')}</div>
     <div id=lateBox class=ipay-late hidden>
       <div class=grid>
-        <label>جریمه نهایی (تومان)<input name=lateFee inputmode=numeric></label>
+        <label>جریمه نهایی (تومان)<input name=lateFee data-money inputmode=numeric></label>
         <label class=w>یادداشت تعدیل / لغو جریمه<textarea name=lateNote rows=2 placeholder="اگر جریمه را کمتر یا صفر کردید، دلیل را بنویسید">${esc(i.lateNote||'')}</textarea></label>
       </div>
       <div class=act style="margin-top:8px">
@@ -2521,7 +2590,8 @@ function openPayModal(id,opts){
   if(fEl){
     fEl.value=initFee?F(Math.round(initFee).toLocaleString('en')):'0';
     if((opts.edit||isInstPaid(i))&&(Number(i.lateFee)||0)!==(Number(i.lateCalc)||0))fEl.dataset.touched='1';
-    fEl.oninput=()=>{fEl.dataset.touched='1';fmtIn(fEl);paint()};
+    fEl.oninput=()=>{fEl.dataset.touched='1';fmtMoney(fEl);paint()};
+    paintMoneyWords(fEl);
   }
   m.querySelector('#addPayRow').onclick=()=>{
     const cur=readRows();
@@ -2850,7 +2920,7 @@ function convertReservation(id){
           <dt>مهلت رزرو</dt><dd>${F(r.deadline)}</dd>
         </dl>
         ${needRem>0?`<p class=warn-line>تسویه اولیه هنوز کامل نیست (مانده ${money(needRem)} تومان). می‌توانید تبدیل کنید؛ مانده وارد اقساط قرارداد می‌شود.</p>`:''}
-        ${u.dangSplit?unitOwnersViewHtml(u):''}
+        ${u.dangSplit?unitOwnersViewHtml(u,{primaryCustId:r.cust,compact:1}):''}
       </div>
       <div class=cvt-card>
         <h4>پرداخت‌های منتقل‌شونده</h4>
@@ -3433,20 +3503,23 @@ function facV(c){const f=c.fac;return `<section class="units-panel noprint">
       <select id="hand-${c.id}" onchange="setHand('${c.id}',this.value)" ${can('write')?'':'disabled'}>${HS.map(x=>`<option ${c.hand==x?'selected':''}>${x}</option>`).join('')}</select>
     </div>
   </div>
-  ${f?`<div class=fac-table>${tbl(['اقدام','هزینه (تومان)','انجام شد'],f.map((x,i)=>`<tr><td>${x.t}</td><td><input inputmode=numeric oninput="fmtIn(this)" value="${x.cost?money(x.cost):''}" onchange="setF('${c.id}',${i},'cost',num(this.value))" ${can('write')?'':'readonly'}></td><td><input type=checkbox style="width:auto" ${x.done?'checked':''} onchange="setF('${c.id}',${i},'done',this.checked)" ${can('write')?'':'disabled'}></td></tr>`).join(''))}<p class=fd style="padding:0 18px 14px">جمع هزینه‌ها: ${T(sum(f,x=>x.cost))} | انجام‌شده: ${F(f.filter(x=>x.done).length)} از ${F(f.length)}</p></div>`:''}
+  ${f?`<div class=fac-table>${tbl(['اقدام','هزینه (تومان)','انجام شد'],f.map((x,i)=>`<tr><td>${x.t}</td><td><input data-money inputmode=numeric oninput="fmtMoney(this)" value="${x.cost?money(x.cost):''}" onchange="setF('${c.id}',${i},'cost',num(this.value))" ${can('write')?'':'readonly'}></td><td><input type=checkbox style="width:auto" ${x.done?'checked':''} onchange="setF('${c.id}',${i},'done',this.checked)" ${can('write')?'':'disabled'}></td></tr>`).join(''))}<p class=fd style="padding:0 18px 14px">جمع هزینه‌ها: ${T(sum(f,x=>x.cost))} | انجام‌شده: ${F(f.filter(x=>x.done).length)} از ${F(f.length)}</p></div>`:''}
 </section>`}
 // پرونده مشتری، گزارش‌ها، پشتیبان
 const KY=['تصویر کارت ملی','تصویر شناسنامه','شبا/حساب بانکی متعلق به خود مشتری','نشانی و شماره تماس تأییدشده','فرم اعلام پرداخت امضاشده'];
 const setK=(id,k,v)=>{const c=cust(id);if(!c.id)return;(c.kyc=c.kyc||{})[k]=!!v;if(!v)delete c.kyc[k];save();render()};
 const addN=id=>form('ثبت تماس / یادداشت',[{k:'d',l:'تاریخ',d:todayJ(),j:1,r:1},{k:'t',l:'شرح تماس یا پیگیری',t:'area',w:1,r:1},{k:'by',l:'ثبت‌کننده',r:1,d:S.me||ME.name||''}],0,v=>{S.me=v.by;const c=cust(id);if(!c.id)return false;(c.notes=c.notes||[]).push(v);save();render()});
-function cuV(){const c=S.customers.find(x=>x.id==V.id);if(!c)return custV();const cs=S.contracts.filter(x=>x.cust==c.id),rv=S.reservations.filter(x=>x.cust==c.id),ls=S.leads.filter(x=>x.cust==c.id),k=c.kyc||{},shares=custDangShares(c.id),cis=custInstStats(cs);
+function cuV(){const c=S.customers.find(x=>x.id==V.id);if(!c)return custV();const cs=S.contracts.filter(x=>x.cust==c.id),viaDang=contractsViaDang(c.id).filter(x=>x.contract.cust!==c.id),rv=S.reservations.filter(x=>x.cust==c.id),ls=S.leads.filter(x=>x.cust==c.id),k=c.kyc||{},shares=custDangShares(c.id),cis=custInstStats(cs),linkedCount=cs.length+viaDang.length;
  return `<div class=top><h2>${esc(c.name)}</h2><div><button onclick="go('cust')">بازگشت</button> <button onclick="addR({cust:'${c.id}'})">رزرو</button> <button onclick="addC({cust:'${c.id}'})">قرارداد</button> ${(can('acct')||can('admin'))?`<button class=btn-soft onclick="openAcctForCustomer('${c.id}')">حسابداری / پرداخت</button>`:''} <button class=pri onclick="addN('${c.id}')">ثبت تماس</button> ${canDeleteRec()?`<button class="btn-ghost danger" onclick="delCu('${c.id}')">حذف کامل پرونده</button>`:''}</div></div><p>کد ملی ${F(c.nid)} | پدر: ${esc(c.father||'—')} | ☎ <a class=ph href="tel:${N(c.phone)}">${F(c.phone)}</a> | ${esc(c.addr||'')}</p>
- <div class=stats><div class=st><b>${F(cs.length)}</b><span>قرارداد</span></div><div class=st><b>${money(sum(cs,paidSum))}</b><span>پرداخت‌شده</span></div><div class=st><b>${money(sum(cs,x=>x.total-paidSum(x)))}</b><span>مانده قراردادها</span></div><div class=st><b>${F(cis.paid)}${cis.total?` / ${F(cis.total)}`:''}</b><span>اقساط پرداخت‌شده</span></div><div class=st><b>${F(cis.unpaid+cis.partial)}</b><span>اقساط باقی‌مانده</span></div><div class=st><b>${F(rv.length)}</b><span>رزرو</span></div><div class=st><b>${F(shares.length)}</b><span>سهم دانگی</span></div></div>
+ <div class=stats><div class=st><b>${F(linkedCount)}</b><span>قرارداد مرتبط</span></div><div class=st><b>${money(sum(cs,paidSum))}</b><span>پرداخت‌شده</span></div><div class=st><b>${money(sum(cs,x=>x.total-paidSum(x)))}</b><span>مانده قراردادها</span></div><div class=st><b>${F(cis.paid)}${cis.total?` / ${F(cis.total)}`:''}</b><span>اقساط پرداخت‌شده</span></div><div class=st><b>${F(cis.unpaid+cis.partial)}</b><span>اقساط باقی‌مانده</span></div><div class=st><b>${F(rv.length)}</b><span>رزرو</span></div><div class=st><b>${F(shares.length)}</b><span>سهم دانگی</span></div></div>
  <h3>مدارک و احراز هویت (${F(KY.filter(x=>k[x]).length)} از ${F(KY.length)})</h3><div class=wrap style="padding:8px 12px">${KY.map(x=>`<label style="display:flex;gap:8px;align-items:center"><input type=checkbox style="width:auto" ${k[x]?'checked':''} onchange="setK('${c.id}','${x}',this.checked)"> ${x}</label>`).join('')}</div>
  ${ls.length?`<h3>سرنخ</h3>`+tbl(['منبع','مرحله','مسئول','هماهنگ‌کننده بازدید','پیگیری بعدی',''],ls.map(l=>`<tr><td>${esc(l.src||'')}</td><td>${LS[l.stage]}</td><td>${esc(l.rep||'—')}</td><td>${esc(l.vcName||'—')}${l.vcPhone?' – '+F(l.vcPhone):''}</td><td>${l.next?F(l.next):'—'}</td><td><button class=sm onclick="go('lv','${l.id}')">پرونده سرنخ</button></td></tr>`).join('')):''}
- <h3>مالکیت دانگی</h3>${shares.length?tbl(['پروژه','واحد','سهم','توضیح',''],shares.map(s=>`<tr><td>${esc(s.proj.name)}</td><td>واحد ${esc(s.unit.no)}${s.unit.block?' · '+esc(s.unit.block):''}</td><td><b>${F(s.owner.dang)} دانگ</b> از ${F(DANG_MAX)}</td><td>${esc(s.owner.note||'—')}</td><td><button class=sm onclick="go('pd','${s.proj.id}')">واحدها</button></td></tr>`).join('')):empty('سهم دانگی ثبت‌شده‌ای ندارد.')}
+  <h3>مالکیت دانگی</h3>${shares.length?tbl(['پروژه','واحد','سهم','توضیح','قرارداد واحد',''],shares.map(s=>{const linked=contractByUnit(s.proj.id,s.unit.id);return `<tr><td>${esc(s.proj.name)}</td><td>واحد ${esc(s.unit.no)}${s.unit.block?' · '+esc(s.unit.block):''}</td><td><b>${F(s.owner.dang)} دانگ</b> از ${F(DANG_MAX)}</td><td>${esc(s.owner.note||'—')}</td><td>${linked?`<b>${esc(linked.no)}</b>${linked.cust===c.id?'':' <span class="badge warn">شریک دانگی</span>'}`:'—'}</td><td>${linked?`<button class=sm onclick="go('cd','${linked.id}')">قرارداد</button> `:''}<button class=sm onclick="go('pd','${s.proj.id}')">واحدها</button></td></tr>`}).join('')):empty('سهم دانگی ثبت‌شده‌ای ندارد.')}
  <h3>رزروها</h3>${rv.length?tbl(['شماره','واحد','پرداخت‌شده','وضعیت',''],rv.map(r=>`<tr><td>${r.no}</td><td>${esc(unitTxt(r.proj,r.unit))}</td><td>${money(rPaid(r))}</td><td>${RS[r.st]}</td><td><button class=sm onclick="go('rd','${r.id}')">پرونده</button></td></tr>`).join('')):empty('رزروی ندارد.')}
- <h3>قراردادها</h3>${cs.length?tbl(['شماره','نوع','واحد','مبلغ کل','پرداخت‌شده','مانده','اقساط',''],cs.map(x=>{const s=instStats(x);return `<tr><td>${x.no}</td><td>${typeName(x.type)}</td><td>${esc(unitTxt(x.proj,x.unit))}</td><td>${money(x.total)}</td><td>${money(paidSum(x))}</td><td>${money(x.total-paidSum(x))}</td><td>${F(s.paid)}/${F(s.total)}</td><td><button class=sm onclick="go('cd','${x.id}')">باز کردن</button></td></tr>`}).join('')):empty('قراردادی ندارد.')}
+ <h3>قراردادها</h3>${(cs.length||viaDang.length)?tbl(['شماره','نقش','نوع','واحد','مبلغ کل','پرداخت‌شده','مانده','اقساط',''],[
+   ...cs.map(x=>{const s=instStats(x);return `<tr><td>${x.no}</td><td><span class="badge ok">خریدار اصلی</span></td><td>${typeName(x.type)}</td><td>${esc(unitTxt(x.proj,x.unit))}</td><td>${money(x.total)}</td><td>${money(paidSum(x))}</td><td>${money(x.total-paidSum(x))}</td><td>${F(s.paid)}/${F(s.total)}</td><td><button class=sm onclick="go('cd','${x.id}')">باز کردن</button></td></tr>`}),
+   ...viaDang.map(({contract:x,share:s})=>{const st=instStats(x);return `<tr><td>${x.no}</td><td><span class="badge warn">شریک دانگی · ${F(s.owner.dang)} دانگ</span></td><td>${typeName(x.type)}</td><td>${esc(unitTxt(x.proj,x.unit))}</td><td>${money(x.total)}</td><td>${money(paidSum(x))}</td><td>${money(x.total-paidSum(x))}</td><td>${F(st.paid)}/${F(st.total)}</td><td><button class=sm onclick="go('cd','${x.id}')">باز کردن</button></td></tr>`})
+ ].join('')):empty('قراردادی ندارد.')}
  <h3>تاریخچه تماس‌ها و پیگیری‌ها</h3>${(c.notes||[]).length?tbl(['تاریخ','ثبت‌کننده','شرح'],[...c.notes].reverse().map(n=>`<tr><td>${F(n.d)}</td><td>${esc(n.by)}</td><td style="white-space:normal">${esc(n.t)}</td></tr>`).join('')):empty('هنوز تماسی ثبت نشده است.')}`}
 const dmDoc=(c,cu)=>{
   const L=(c.inst||[]).filter(i=>!isInstPaid(i)&&diff(i.date)<=30);

@@ -54,6 +54,44 @@ function money(n) {
 function parseMoney(s) {
   return Number(String(s || '').replace(/[^\d.-]/g, '')) || 0;
 }
+const U1 = ['', 'یک', 'دو', 'سه', 'چهار', 'پنج', 'شش', 'هفت', 'هشت', 'نه', 'ده', 'یازده', 'دوازده', 'سیزده', 'چهارده', 'پانزده', 'شانزده', 'هفده', 'هجده', 'نوزده'];
+const T1 = ['', '', 'بیست', 'سی', 'چهل', 'پنجاه', 'شصت', 'هفتاد', 'هشتاد', 'نود'];
+const H1 = ['', 'صد', 'دویست', 'سیصد', 'چهارصد', 'پانصد', 'ششصد', 'هفتصد', 'هشتصد', 'نهصد'];
+const B1 = ['', 'هزار', 'میلیون', 'میلیارد', 'تریلیون'];
+function w3(n) {
+  const p = [];
+  if (n >= 100) p.push(H1[Math.floor(n / 100)]);
+  n %= 100;
+  if (n >= 20) { p.push(T1[Math.floor(n / 10)]); if (n % 10) p.push(U1[n % 10]); }
+  else if (n) p.push(U1[n]);
+  return p.join(' و ');
+}
+function words(n) {
+  n = Math.round(Number(n) || 0);
+  if (!n) return 'صفر';
+  const g = [];
+  let i = 0;
+  while (n) {
+    const r = n % 1000;
+    if (r) g.unshift(w3(r) + (B1[i] ? ' ' + B1[i] : ''));
+    n = Math.floor(n / 1000);
+    i += 1;
+  }
+  return g.join(' و ');
+}
+function paintMoneyWords(el) {
+  if (!el || !el.parentElement) return;
+  let h = el.parentElement.querySelector(':scope > .money-words, :scope > .hint.money-words');
+  if (!h) {
+    h = document.createElement('small');
+    h.className = 'hint money-words';
+    el.insertAdjacentElement('afterend', h);
+  }
+  const n = parseMoney(el.value);
+  const t = n ? `${words(n)} تومان` : '';
+  h.textContent = t;
+  h.hidden = !t;
+}
 function unitName(id) {
   return state.units.find((u) => u.id === id)?.name || '—';
 }
@@ -212,7 +250,8 @@ function render() {
     content.innerHTML = settingsHtml();
     $('#saveSettings').onclick = saveSettings;
     $('#syncLegal').onclick = syncLegal;
-    $('#fineAmt').oninput = (e) => { e.target.value = money(parseMoney(e.target.value)); };
+    $('#fineAmt').oninput = (e) => { e.target.value = money(parseMoney(e.target.value)); paintMoneyWords(e.target); };
+    paintMoneyWords($('#fineAmt'));
     return;
   }
 }

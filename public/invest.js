@@ -266,7 +266,7 @@ ${art6}
       <div class=grid>
         <label>مهلت فسخ بدون خسارت (روز)<input name=coolDays inputmode=numeric placeholder="مثلاً ۳۰"></label>
         <label>روز اضافه به تحویل به‌ازای هر روز تأخیر<input name=delayExtraDays inputmode=numeric placeholder="مثلاً ۱۵"></label>
-        <label>خسارت روزانه تأخیر تحویل (تومان)<input name=delayFineDaily inputmode=numeric></label>
+        <label>خسارت روزانه تأخیر تحویل (تومان)<input name=delayFineDaily data-money inputmode=numeric></label>
         <label>شماره قرارداد در بند ۱۹-۹<input name=chequeNo></label>
       </div>
     </div>
@@ -296,7 +296,8 @@ ${art6}
     set('chequeNo', init.chequeNo);
     set('payBank', init.payBank); set('payCard', init.payCard); set('paySheba', init.paySheba); set('payAcct', init.payAcct); set('payName', init.payName);
     m.querySelector('[name=delayFineDaily]').value = init.delayFineDaily ? money(init.delayFineDaily) : '';
-    m.querySelector('[name=delayFineDaily]').oninput = function () { fmtIn(this); };
+    m.querySelector('[name=delayFineDaily]').oninput = function () { fmtMoney(this); };
+    paintMoneyWords(m.querySelector('[name=delayFineDaily]'));
     const birthEl = m.querySelector('[name=birth]');
     birthEl.value = init.birth ? F(init.birth) : '';
     bindDate(birthEl);

@@ -167,7 +167,7 @@ ${inlineSig()}
               <option value="خانم / آقای">خانم / آقای</option>
             </select>
           </label>
-          <label>مبلغ کل واحد (تومان)<input name=total inputmode=numeric></label>
+          <label>مبلغ کل واحد (تومان)<input name=total data-money inputmode=numeric></label>
           <label>طبقه<input name=floor></label>
           <label>شماره واحد<input name=unitNo></label>
           <label class=w>نشانی در رزرونامه<textarea name=loc rows=2></textarea></label>
@@ -181,7 +181,7 @@ ${inlineSig()}
         <p class=fd>مانده نهایی تا مهلت رزرو خودکار از مبلغ کل منهای پرداخت‌ها و این اقساط حساب می‌شود.</p>
         <div class=grid>
           ${[0, 1, 2, 3].map((i) => `
-            <label>مبلغ قسط ${F(i + 1)}<input name=samt${i} inputmode=numeric></label>
+            <label>مبلغ قسط ${F(i + 1)}<input name=samt${i} data-money inputmode=numeric></label>
             <label>سررسید قسط ${F(i + 1)}<input name=sdate${i} readonly style="cursor:pointer" placeholder="انتخاب از تقویم"></label>
           `).join('')}
         </div>
@@ -211,12 +211,14 @@ ${inlineSig()}
     set('payAcct', init.payAcct); set('payName', init.payName);
     const totalEl = m.querySelector('[name=total]');
     totalEl.value = init.total ? money(init.total) : '';
-    totalEl.oninput = function () { fmtIn(this); };
+    totalEl.oninput = function () { fmtMoney(this); };
+    paintMoneyWords(totalEl);
     init.schedule.forEach((s, i) => {
       const a = m.querySelector(`[name=samt${i}]`);
       const d = m.querySelector(`[name=sdate${i}]`);
       a.value = s.amt ? money(s.amt) : '';
-      a.oninput = function () { fmtIn(this); };
+      a.oninput = function () { fmtMoney(this); };
+      paintMoneyWords(a);
       d.value = s.date ? F(s.date) : '';
       bindDate(d);
     });
