@@ -2,6 +2,16 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import mongoose from 'mongoose';
+import multer from 'multer';
+import {
+  attachmentOptions,
+  createAttachment,
+  deleteAttachment,
+  getAttachmentFile,
+  listAttachments,
+  purgeAttachments,
+  updateAttachment,
+} from './attachments.js';
 import { getDummyHash } from './bootstrap.js';
 import {
   addFollowUp,
@@ -54,6 +64,11 @@ import {
 } from './workcases.js';
 
 export const api = Router();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+});
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -175,6 +190,87 @@ api.get('/state', requireAuth, wrap(async (req, res) => {
   const settings = await getAdminSettings();
   state.data.cfg = { ...state.data.cfg, legalDays: settings.legalDays, autoLegal: settings.autoLegal };
   res.json(state);
+}));
+
+api.get('/attachments/options', requireAuth, (req, res) => {
+  res.json(attachmentOptions());
+});
+
+api.get('/attachments', requireAuth, wrap(async (req, res) => {
+  if (!hasPerm(req.user, 'cust') && !hasPerm(req.user, 'cont') && !hasPerm(req.user, 'write')
+    && !hasPerm(req.user, 'admin') && !hasPerm(req.user, 'legal') && !hasPerm(req.user, 'dash')) {
+    throw new AppError('به اسناد دسترسی ندارید', 403);
+  }
+  res.json({
+    items: await listAttachments({
+      custId: req.query.custId,
+      contractId: req.query.contractId,
+    }),
+  });
+}));
+
+api.post('/attachments', requireAuth, (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+        return next(new AppError('حجم فایل حداکثر ۵ مگابایت است', 400));
+      }
+      return next(err);
+    }
+    return next();
+  });
+}, wrap(async (req, res) => {
+  if (!hasPerm(req.user, 'write') && !hasPerm(req.user, 'admin')) {
+    throw new AppError('اجازه بارگذاری سند ندارید', 403);
+  }
+  const item = await createAttachment({
+    file: req.file,
+    custId: req.body?.custId,
+    contractId: req.body?.contractId,
+    kind: req.body?.kind,
+    title: req.body?.title,
+  }, req.user);
+  res.status(201).json(item);
+}));
+
+api.patch('/attachments/:id', requireAuth, wrap(async (req, res) => {
+  if (!hasPerm(req.user, 'write') && !hasPerm(req.user, 'admin')) {
+    throw new AppError('اجازه ویرایش سند ندارید', 403);
+  }
+  res.json(await updateAttachment(req.params.id, req.body || {}, req.user));
+}));
+
+api.get('/attachments/:id/file', requireAuth, wrap(async (req, res) => {
+  if (!hasPerm(req.user, 'cust') && !hasPerm(req.user, 'cont') && !hasPerm(req.user, 'write')
+    && !hasPerm(req.user, 'admin') && !hasPerm(req.user, 'legal') && !hasPerm(req.user, 'dash')) {
+    throw new AppError('به اسناد دسترسی ندارید', 403);
+  }
+  const { meta, stream, mime, originalName } = await getAttachmentFile(req.params.id);
+  res.setHeader('Content-Type', mime);
+  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(originalName || meta.id)}`);
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  stream.on('error', (err) => {
+    if (!res.headersSent) res.status(404).json({ message: 'فایل پیدا نشد' });
+    else res.destroy(err);
+  });
+  stream.pipe(res);
+}));
+
+api.delete('/attachments/:id', requireAuth, wrap(async (req, res) => {
+  if (!hasPerm(req.user, 'write') && !hasPerm(req.user, 'admin')) {
+    throw new AppError('اجازه حذف سند ندارید', 403);
+  }
+  res.json(await deleteAttachment(req.params.id));
+}));
+
+api.post('/attachments/purge', requireAuth, wrap(async (req, res) => {
+  if (!hasPerm(req.user, 'write') && !hasPerm(req.user, 'admin')) {
+    throw new AppError('اجازه حذف ندارید', 403);
+  }
+  res.json(await purgeAttachments({
+    customerIds: Array.isArray(req.body?.customerIds) ? req.body.customerIds : [],
+    contractIds: Array.isArray(req.body?.contractIds) ? req.body.contractIds : [],
+  }));
 }));
 
 api.put('/state', requireAuth, wrap(async (req, res) => {

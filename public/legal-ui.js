@@ -58,8 +58,16 @@
         <div><span>مبلغ کل</span><b>${c.total ? money(c.total) + ' تومان' : '—'}</b></div>
         <div><span>مدت</span><b>${c.dur ? F(c.dur) + ' ماه' : '—'}</b></div>
         <div><span>تعداد اقساط</span><b>${F((c.inst || []).length)}</b></div>
+        ${(() => {
+          const downs = (c.inst || []).filter((i) => /پیش\s*پرداخت|بیعانه|قرض\s*الحسنه/.test(String(i.title || '')));
+          const downAmt = downs.reduce((s, i) => s + (Number(i.amt) || 0), 0);
+          const paid = typeof paidSum === 'function' ? paidSum(c) : 0;
+          const rem = Math.max(0, (Number(c.total) || 0) - paid);
+          return `${downAmt ? `<div><span>پیش‌پرداخت ثبت‌شده</span><b>${money(downAmt)} تومان</b></div>` : ''}
+        <div><span>مانده بدهی</span><b>${money(rem)} تومان</b></div>`;
+        })()}
       </div>
-      <p class="fd" style="margin:8px 0 0">نام، کد ملی، پروژه، واحد، مبلغ و اقساط از پرونده‌ها خوانده می‌شود. اگر چیزی این‌جا غلط است همان پرونده را اصلاح کنید تا متن قرارداد هم درست شود.</p>
+      <p class="fd" style="margin:8px 0 0">نام، کد ملی، پروژه، واحد، مبلغ و اقساط از پرونده‌ها خوانده می‌شود. اگر چیزی این‌جا غلط است همان پرونده را اصلاح کنید تا متن قرارداد هم درست شود. مبلغ قرض‌الحسنه را می‌توانید از پیش‌پرداخت همین قرارداد همگام کنید.</p>
     </div>`;
   }
   function leaseFoot() {

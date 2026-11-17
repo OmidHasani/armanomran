@@ -18,7 +18,7 @@ const fullC=(c,cu,p,u,t)=>{const L=[['ماده ۱ – طرفین قرارداد'
  return L.map(([h,b])=>`<p><b>${h}:</b> ${b}</p>`).join('')};
 const UST={free:'آزاد',res:'رزرو',sold:'فروخته'};
 let S={projects:[],customers:[],contracts:[],reservations:[],leads:[],parties:[],ledger:[],checks:[],cfg:{},me:'',pn:1000,cn:1000,rn:1000,_v:0},V={n:'dash'},Q='';
-let ME={name:'',username:'',role:'',perms:[],unitIds:[]},USERS=[],ORG_UNITS=[],DIR_USERS=[],LEGAL=[],LEGAL_STATS={},WORK=[],WORK_STATS={},LEGAL_OPTS={caseStatus:[],caseKinds:[],followActions:[],followSubjects:[],followResults:[],perms:[],roles:{}},LEAD_DRAFT={},LEAD_FOCUS=null,UNIT_EDIT=null,UNIT_DUP_HINT=null,UNIT_FILTER='all',UNIT_OWNERS_DRAFT=null,INST_EDIT=null,syncText='',saveTimer=null,saveBusy=false,saveQueued=false,localDirty=false,saveWaiters=[],syncConflict=false,versionWatchTimer=null;
+let ME={name:'',username:'',role:'',perms:[],unitIds:[]},USERS=[],ORG_UNITS=[],DIR_USERS=[],LEGAL=[],LEGAL_STATS={},WORK=[],WORK_STATS={},LEGAL_OPTS={caseStatus:[],caseKinds:[],followActions:[],followSubjects:[],followResults:[],perms:[],roles:{}},LEAD_DRAFT={},LEAD_FOCUS=null,UNIT_EDIT=null,UNIT_DUP_HINT=null,UNIT_FILTER='all',UNIT_OWNERS_DRAFT=null,INST_EDIT=null,INST_OPEN=true,syncText='',saveTimer=null,saveBusy=false,saveQueued=false,localDirty=false,saveWaiters=[],syncConflict=false,versionWatchTimer=null;
 const DANG_MAX=6;
 const nowH=()=>{const d=new Date();return[d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':')};
 const actor=()=>ME.name||S.me||ME.username||'—';
@@ -329,8 +329,15 @@ function instPays(i){
 }
 const instReceived=i=>Math.round(sum(instPays(i),p=>num(p.amt)));
 const instRemain=i=>Math.max(0,num(i?.amt)-instReceived(i));
-const isInstPaid=i=>instRemain(i)<=0;
+const isInstPaid=i=>num(i?.amt)>0&&instRemain(i)<=0;
 const isInstPartial=i=>!isInstPaid(i)&&instReceived(i)>0;
+const isEmptyInstDraft=i=>!i?.fromPayId&&num(i?.amt)<=0&&instReceived(i)<=0&&!(String(i?.ref||'').trim())&&(!Array.isArray(i?.pays)||!i.pays.length);
+function purgeEmptyInstDrafts(c,keepId){
+  if(!c||!Array.isArray(c.inst))return false;
+  const n=c.inst.length;
+  c.inst=c.inst.filter(i=>i.id===keepId||!isEmptyInstDraft(i));
+  return c.inst.length!==n;
+}
 function syncInstPaid(i){
   if(!i)return;
   if(!Array.isArray(i.pays))i.pays=[];
@@ -389,12 +396,88 @@ const payNoteLabel=(p,c)=>{
   if(c){const src=(c.inst||[]).find(i=>i.id===fromId);if(src)title=src.title||title}
   return overpayText(p.amt,title);
 };
-const payLineHtml=(p,c)=>{
-  const over=!!payOverFrom(p);
-  const nl=payNoteLabel(p,c);
-  if(over)return `${money(p.amt)}${nl?` · ${esc(nl)}`:''}`;
-  return `${money(p.amt)}${p.ref?` · ${F(p.ref)}`:''}${p.date?` · ${F(p.date)}`:''}`;
+const payOverTitle=(p,c)=>{
+  const fromId=payOverFrom(p);
+  if(!fromId||!c)return 'قسط';
+  const src=(c.inst||[]).find(i=>i.id===fromId);
+  return (src&&src.title)||'قسط';
 };
+const payNoteShort=(t,n=90)=>{
+  const s=String(t||'').replace(/\s+/g,' ').trim();
+  if(s.length<=n)return{text:s,long:false};
+  return{text:s.slice(0,n).replace(/\s+\S*$/,'')+'…',long:true};
+};
+const payItemRowsHtml=(p,c,rest)=>{
+  const over=!!payOverFrom(p);
+  const rawNote=String(p.note||'');
+  const note=rawNote&&!rawNote.startsWith('overpay:')?rawNote:'';
+  const cut=note?payNoteShort(note,120):null;
+  const src=over?payOverTitle(p,c):(p.payer?String(p.payer):'—');
+  const cls=[over?'is-over':'',rest?'pt-rest':''].filter(Boolean).join(' ');
+  const hide=rest?' hidden':'';
+  return `<tr class="${cls}"${hide}>
+    <td><span class="pt-kind ${over?'warn':'ok'}">${over?'کسر مازاد':'پرداخت'}</span></td>
+    <td>${esc(src)}</td>
+    <td>${p.ref?F(p.ref):'—'}</td>
+    <td>${p.date?F(p.date):'—'}</td>
+    <td class=num>${money(p.amt)}</td>
+  </tr>${cut?`<tr class="pt-note-row ${cls}"${hide}><td colspan=5><span class=pay-note-text>${esc(cut.text)}</span>${cut.long?` <button type=button class=pay-note-more data-full="${esc(note)}" onclick="togglePayNote(this)">بیشتر</button>`:''}</td></tr>`:''}`;
+};
+function paySlipsBlockHtml(pays,c){
+  if(!pays||!pays.length)return '';
+  const limit=2,extra=Math.max(0,pays.length-limit);
+  const head=pays.slice(0,limit).map(p=>payItemRowsHtml(p,c,false)).join('');
+  const tail=extra?pays.slice(limit).map(p=>payItemRowsHtml(p,c,true)).join(''):'';
+  return `<div class=pt-wrap>
+    <div class=pt-caption>ریز پرداخت‌ها · ${F(pays.length)} مورد</div>
+    <table class=pt-table>
+      <thead>
+        <tr>
+          <th>نوع</th>
+          <th>مبدأ</th>
+          <th>کد پیگیری</th>
+          <th>تاریخ</th>
+          <th>مبلغ (تومان)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${head}${tail}
+        ${extra?`<tr class=pt-more-row><td colspan=5><button type=button class=pt-more data-more="${extra}" onclick="togglePaySlips(this)">و ${F(extra)} مورد دیگر…</button></td></tr>`:''}
+      </tbody>
+    </table>
+  </div>`;
+}
+function togglePaySlips(btn){
+  if(!btn)return;
+  const body=btn.closest('tbody');
+  if(!body)return;
+  const rest=[...body.querySelectorAll('.pt-rest')];
+  if(!rest.length)return;
+  const willOpen=rest[0].hasAttribute('hidden');
+  rest.forEach(r=>{
+    r.classList.toggle('is-open',willOpen);
+    if(willOpen)r.removeAttribute('hidden');else r.setAttribute('hidden','');
+  });
+  const n=Number(btn.dataset.more)||0;
+  btn.textContent=willOpen?'بستن':`و ${F(n)} مورد دیگر…`;
+  btn.setAttribute('aria-expanded',willOpen?'true':'false');
+}
+function togglePayNote(btn){
+  if(!btn)return;
+  const t=btn.parentElement?.querySelector('.pay-note-text');
+  if(!t)return;
+  const full=btn.dataset.full||'';
+  const open=btn.dataset.open==='1';
+  if(open){
+    t.textContent=payNoteShort(full,120).text;
+    btn.dataset.open='0';
+    btn.textContent='بیشتر';
+  }else{
+    t.textContent=full;
+    btn.dataset.open='1';
+    btn.textContent='بستن';
+  }
+}
 function stripOverpayCredits(c,fromInstId){
   (c.inst||[]).forEach(x=>{
     if(!Array.isArray(x.pays)||!x.pays.length)return;
@@ -502,7 +585,89 @@ const lateDocLine=i=>{
 };
 const empty=t=>`<div class=empty>${t}</div>`,tbl=(h,r)=>`<div class=wrap><table><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr>${r}</table></div>`;
 function remember(){try{sessionStorage.setItem('armanView',JSON.stringify(V))}catch(e){}}
-function go(n,id){V={n,id};Q='';if(n!=='pd'){UNIT_EDIT=null;UNIT_DUP_HINT=null;UNIT_FILTER='all'}if(n!=='cd')INST_EDIT=null;remember();if(n==='admin'){loadUsers();loadOrgUnits()}if(n==='legal'||n==='ld')loadLegal();if(n==='inbox'||n==='wd')loadInbox();render();scrollTo(0,0)}
+function go(n,id){V={n,id};Q='';if(n!=='pd'){UNIT_EDIT=null;UNIT_DUP_HINT=null;UNIT_FILTER='all'}if(n!=='cd'){INST_EDIT=null;INST_OPEN=true}else INST_OPEN=true;remember();if(n==='admin'){loadUsers();loadOrgUnits()}if(n==='legal'||n==='ld')loadLegal();if(n==='inbox'||n==='wd')loadInbox();render();scrollTo(0,0)}
+function toggleInstPanel(){
+  const tog=$('#instTog'),body=$('#instBody');
+  if(tog&&body&&!INST_EDIT){
+    const open=tog.getAttribute('aria-expanded')!=='true';
+    tog.setAttribute('aria-expanded',open?'true':'false');
+    body.hidden=!open;
+    INST_OPEN=open;
+    return;
+  }
+  if(INST_OPEN||INST_EDIT){
+    if(INST_EDIT){
+      const id=INST_EDIT;INST_EDIT=null;
+      const pair=gi(id);
+      if(pair&&isEmptyInstDraft(pair[1])){
+        pair[0].inst=pair[0].inst.filter(x=>x.id!==id);
+        save();
+      }
+    }
+    INST_OPEN=false;
+  }else INST_OPEN=true;
+  render();
+}
+function toggleCdActions(btn){
+  const wrap=btn?.closest?.('.cd-actions')||$('#cdActions');
+  if(!wrap)return;
+  const open=!wrap.classList.contains('open');
+  document.querySelectorAll('.cd-actions.open,.cd-page .mn.open').forEach(x=>x.classList.remove('open'));
+  wrap.classList.toggle('open',open);
+}
+function toggleCdMn(btn){
+  const mn=btn?.closest?.('.mn');
+  if(!mn)return;
+  const open=!mn.classList.contains('open');
+  document.querySelectorAll('.cd-actions.open,.cd-page .mn.open').forEach(x=>x.classList.remove('open'));
+  mn.classList.toggle('open',open);
+}
+function toggleInstDetail(btn){
+  const id=btn?.dataset?.detail;if(!id)return;
+  const row=document.getElementById('d_'+id);if(!row)return;
+  const open=btn.getAttribute('aria-expanded')!=='true';
+  btn.setAttribute('aria-expanded',open?'true':'false');
+  row.hidden=!open;
+}
+function toggleOverGrp(btn){
+  const open=btn.getAttribute('aria-expanded')!=='true';
+  btn.setAttribute('aria-expanded',open?'true':'false');
+  const tb=btn.closest('tbody');if(!tb)return;
+  tb.querySelectorAll('tr.sub').forEach(r=>r.hidden=!open);
+}
+function toggleNoteClamp(btn){
+  const t=btn?.previousElementSibling;if(!t)return;
+  const clamped=t.classList.toggle('clamp');
+  btn.textContent=clamped?'بیشتر':'کمتر';
+}
+function bindCdPage(){
+  if(!$('.cd-page'))return;
+  document.querySelectorAll('.cd-page tr.row').forEach(r=>{
+    const h=['','','مبلغ','پرداخت‌شده','مانده'];
+    [2,3,4].forEach(i=>{if(r.children[i])r.children[i].dataset.l=h[i]});
+  });
+  const drop=$('#attachDrop');
+  if(drop&&!drop.dataset.bound){
+    drop.dataset.bound='1';
+    ['dragover','dragenter'].forEach(e=>drop.addEventListener(e,x=>{x.preventDefault();drop.classList.add('over')}));
+    ['dragleave','drop'].forEach(e=>drop.addEventListener(e,x=>{x.preventDefault();drop.classList.remove('over')}));
+    drop.addEventListener('drop',x=>{
+      if(!x.dataTransfer?.files?.length)return;
+      const panel=$('#attachPanel');if(!panel)return;
+      openAttachUpload(panel.dataset.cust||'',panel.dataset.contract||'');
+    });
+  }
+  if(!document._cdMenuBound){
+    document._cdMenuBound=1;
+    document.addEventListener('click',e=>{
+      if(e.target.closest?.('.cd-actions')||e.target.closest?.('.cd-page .mn'))return;
+      document.querySelectorAll('.cd-actions.open,.cd-page .mn.open').forEach(x=>x.classList.remove('open'));
+    });
+    document.addEventListener('keydown',e=>{
+      if(e.key==='Escape')document.querySelectorAll('.cd-actions.open,.cd-page .mn.open').forEach(x=>x.classList.remove('open'));
+    });
+  }
+}
 const canSaveData=()=>can('write')||can('admin')||can('acct');
 const canInbox=()=>can('inbox')||can('legal')||can('admin')||(ME.unitIds||[]).length>0;
 const canRefer=()=>can('write')||can('admin')||can('legal')||can('inbox');
@@ -520,6 +685,8 @@ function render(){const nav=firstNav(),act={cv:'cust',rep:'rep',rd:'res',pd:'pro
   refreshMoneyWords($('#main'));
   if(V.n=='doc'){const p=$('.paper'),o=docObj();if(p){const editable=V.k!=='acct'&&V.k!=='checks'&&!!can('write');p.contentEditable=editable;const k=edKey();if(editable&&o&&o.ed&&o.ed[k])p.innerHTML=o.ed[k];
   if(p.classList.contains('legal')&&typeof fitLegalPages==='function'){requestAnimationFrame(()=>{fitLegalPages(p);if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>fitLegalPages(p))})}}}
+  if(V.n==='cv'||V.n==='cd')hydrateAttachments();
+  if(V.n==='cd')bindCdPage();
   setSync(syncText)}
 function cboxOptParts(label){
   const s=String(label||'');
@@ -697,7 +864,11 @@ function form(title,fields,init,ok){const m=$('#modal');init=init||{};
   if(f.t==='search')syncCbox(e);
   if(f.j){e.readOnly=true;e.style.cursor='pointer';e.onclick=()=>dpick(e)}
   if(f.t=='money'){e.oninput=()=>{e.value=fm(num(e.value));paintMoneyWords(e);if(f.on)f.on(m,0)};paintMoneyWords(e)}
-  if(f.on&&f.t!=='money'){e.onchange=()=>f.on(m,0);f.on(m,1)}
+  if(f.on&&f.t!=='money'&&f.t!=='check'){
+    e.onchange=()=>f.on(m,0);
+    if(!f.j&&f.t!=='select'&&f.t!=='area'&&f.t!=='search')e.oninput=()=>f.on(m,0);
+    f.on(m,1);
+  }
   else if(f.on&&f.t=='money')f.on(m,1);
  });
  refreshMoneyWords(m);
@@ -1063,6 +1234,21 @@ function dangOwnersLine(u){
     const c=cust(o.custId);
     return `${c.name||'—'} : ${F(o.dang)} دانگ`;
   }).join(' ، ');
+}
+function contractBuyerNames(c,u){
+  const primary=cust(c.cust);
+  if(!u||!u.dangSplit||!(u.owners||[]).length)return primary.name||'—';
+  const names=[];
+  const seen=new Set();
+  const push=name=>{
+    const n=(name||'').trim()||'—';
+    if(seen.has(n))return;
+    seen.add(n);
+    names.push(n);
+  };
+  push(primary.name);
+  (u.owners||[]).forEach(o=>push(cust(o.custId).name));
+  return names.join(' · ')||'—';
 }
 function unitOwnersPanelHtml(){
   const d=UNIT_OWNERS_DRAFT||{dangSplit:false,owners:[]};
@@ -1568,13 +1754,23 @@ function dropLocalCases(pred){
   LEGAL=(LEGAL||[]).filter(c=>!pred(c));
 }
 async function purgeLinkedCases(refs){
+  let deleted=0;
   try{
     const r=await api('/api/workcases/purge',{method:'POST',body:JSON.stringify(refs||{})});
-    return r.deleted||0;
+    deleted+=r.deleted||0;
   }catch(e){
     if(e.message!=='auth')console.warn('purge cases',e.message);
-    return 0;
   }
+  try{
+    const a=await api('/api/attachments/purge',{method:'POST',body:JSON.stringify({
+      customerIds:refs?.customerIds||[],
+      contractIds:refs?.contractIds||[],
+    })});
+    deleted+=a.deleted||0;
+  }catch(e){
+    if(e.message!=='auth')console.warn('purge attachments',e.message);
+  }
+  return deleted;
 }
 function removeAcctForCustomer(custId){
   const pids=new Set((S.parties||[]).filter(p=>p.custId===custId).map(p=>p.id));
@@ -2054,7 +2250,8 @@ function cont(){
     const nextHint=nextDiff==null?'':nextDiff<0?`${F(-nextDiff)} روز گذشته`:nextDiff===0?'امروز':`${F(nextDiff)} روز مانده`;
     const uu=unitOf(c.proj,c.unit);
     const dangLine=dangOwnersLine(uu);
-    return `<article class="cc tone-${st.k}" data-s="${esc(N(c.no+cu.name+cu.phone+unitTxt(c.proj,c.unit)+typeName(c.type)+(dangLine||'')))}" onclick="go('cd','${c.id}')">
+    const buyerTitle=contractBuyerNames(c,uu);
+    return `<article class="cc tone-${st.k}" data-s="${esc(N(c.no+buyerTitle+cu.name+cu.phone+unitTxt(c.proj,c.unit)+typeName(c.type)+(dangLine||'')))}" onclick="go('cd','${c.id}')">
       <header class=cc-head>
         <div class=cc-id>
           <span class=cc-no>${esc(c.no)}</span>
@@ -2064,7 +2261,7 @@ function cont(){
         <span class=cc-type title="${esc(typeName(c.type))}">${esc(typeName(c.type))}</span>
       </header>
       <div class=cc-who>
-        <h4>${esc(cu.name||'—')}</h4>
+        <h4>${esc(buyerTitle)}</h4>
         <p class=cc-meta>
           <span>${esc(unitTxt(c.proj,c.unit))}</span>
           <span class=cc-dot></span>
@@ -2153,6 +2350,7 @@ function syncContractPrice(m){
   }
   const tot=m.querySelector('[name=total]');
   if(tot)tot.value=fm(r.total);
+  if(m.querySelector('#cpay'))syncContractPayPlan(m);
   return r;
 }
 function contractPriceSummaryHtml(r){
@@ -2162,6 +2360,52 @@ function contractPriceSummaryHtml(r){
   if(r.profitOn)rows.push(`<div><span>سود ${F(r.profitPct)}٪</span><b>+ ${money(r.profitAmt)} تومان</b></div>`);
   rows.push(`<div class=cprice-sum-final><span>مبلغ نهایی</span><b>${money(r.total)} تومان</b></div>`);
   return `<div class=cprice-sum>${rows.join('')}</div>`;
+}
+function isDownInst(i){
+  return /پیش\s*پرداخت|بیعانه|قرض\s*الحسنه/.test(String(i?.title||''));
+}
+function contractDownInsts(c){
+  return (c?.inst||[]).filter(isDownInst);
+}
+function contractPayPlanHtml(){
+  return `<div class=cprice id=cpay>
+    <div class=cprice-h>خلاصه پیش‌پرداخت و مانده</div>
+    <p class=fd style="margin:0 0 8px">با ثبت پیش‌پرداخت، مانده بدهی و تقسیم اقساط به‌صورت خودکار محاسبه می‌شود؛ همه مبالغ قابل ویرایش دستی هستند.</p>
+    <div class=cprice-row><span>مبلغ نهایی قرارداد</span><strong data-ptotal>۰</strong></div>
+    <div class=cprice-row><span>پیش‌پرداخت</span><strong data-pdown>۰</strong></div>
+    <div class=cprice-final>مانده بدهی <b data-prest>۰</b> <span>تومان</span></div>
+    <div class=cprice-sub data-pinst>اقساط از مانده محاسبه می‌شوند</div>
+  </div>`;
+}
+function syncContractPayPlan(m){
+  if(!m)return null;
+  let total=num(m.querySelector('[name=total]')?.value);
+  if(!total){
+    const base=num(m.querySelector('[name=base]')?.value);
+    const extraOn=!!m.querySelector('[name=extraOn]')?.checked;
+    const profitOn=!!m.querySelector('[name=profitOn]')?.checked;
+    total=calcInstPrice(base,extraOn,profitOn).total;
+  }
+  const down=num(m.querySelector('[name=down]')?.value);
+  const count=Math.max(0,parseInt(N(m.querySelector('[name=count]')?.value),10)||0);
+  const rest=Math.max(0,total-down);
+  const each=count?Math.floor(rest/count/1000)*1000:0;
+  const root=m.querySelector('#cpay');
+  if(root){
+    const t=root.querySelector('[data-ptotal]');
+    const d=root.querySelector('[data-pdown]');
+    const r=root.querySelector('[data-prest]');
+    const hint=root.querySelector('[data-pinst]');
+    if(t)t.textContent=money(total)+' تومان';
+    if(d)d.textContent=money(down)+' تومان';
+    if(r)r.textContent=money(rest);
+    if(hint){
+      hint.textContent=count
+        ?`${F(count)} قسط از مانده · حدود ${money(each)} تومان برای هر قسط (قسط آخر با مانده خرد تنظیم می‌شود)`
+        :(down?`مانده ${money(rest)} تومان بدون تقسیم اقساط`:'تعداد اقساط را وارد کنید تا تقسیم انجام شود');
+    }
+  }
+  return{total,down,rest,count,each};
 }
 function inlineDangConfirmHtml(parsedUnit){
   let u=null;
@@ -2203,10 +2447,11 @@ function addC(pre){pre=pre||{};
   {k:'extraOn',t:'check',skipRender:1,on:(m)=>syncContractPrice(m)},
   {k:'profitOn',t:'check',skipRender:1,on:(m)=>syncContractPrice(m)},
   {k:'total',t:'money',skipRender:1,r:1,l:'مبلغ نهایی قرارداد'},
-  {k:'down',l:'پیش‌پرداخت (تومان)',t:'money'},
+  {k:'down',l:'پیش‌پرداخت (تومان)',t:'money',on:(m)=>syncContractPayPlan(m)},
   {k:'ddate',l:'تاریخ پرداخت پیش‌پرداخت (اگر پرداخت شده)',j:1,d:pre.rdate||''},
+  {t:'html',html:contractPayPlanHtml()},
   {k:'latePctDaily',l:'جریمه دیرکرد روزانه (٪ از مبلغ قسط)',d:'0'},
-  {k:'count',l:'تعداد اقساط',d:'12'},
+  {k:'count',l:'تعداد اقساط',d:'12',on:(m)=>syncContractPayPlan(m)},
   {k:'first',l:'تاریخ اولین قسط',r:1,j:1,d:addM(todayJ(),1)},
   {k:'step',l:'فاصله اقساط (ماه)',d:'1'},
   {k:'dur',l:'مدت قرارداد / تحویل (ماه)',d:'12'},
@@ -2263,17 +2508,54 @@ function addC(pre){pre=pre||{};
   persistAfter(bits.join(' و ')+' ثبت شد');
   return true;
  });return false})}
+function cdPayDetailHtml(c,i){
+  const pays=instPays(i);if(!pays.length)return '';
+  const normals=pays.filter(p=>!payOverFrom(p));
+  const overs=pays.filter(p=>!!payOverFrom(p));
+  const total=instReceived(i);
+  const fee=Number(i.lateFee)||0;
+  const buyer=(cust(c.cust)||{}).name||'—';
+  const noteRows=(p)=>{
+    const raw=String(p.note||'');
+    const note=raw&&!raw.startsWith('overpay:')?raw:'';
+    if(!note)return '';
+    const long=note.length>110;
+    return `<tr class=note><td colspan=5><span class="${long?'clamp':''}">${esc(note)}</span>${long?` <button class=lk type=button onclick="toggleNoteClamp(this)">بیشتر</button>`:''}</td></tr>`;
+  };
+  const payRow=(p,extraClass='')=>{
+    const over=!!payOverFrom(p);
+    const src=over?payOverTitle(p,c):(p.payer?String(p.payer):buyer);
+    return `<tr class="${extraClass}"${extraClass==='sub'?' hidden':''}>
+      <td><span class="k ${over?'x':''}">${over?'کسر مازاد':'پرداخت'}</span></td>
+      <td>${esc(src)}</td>
+      <td class="${p.ref?'num':'dim'}">${p.ref?F(p.ref):'—'}</td>
+      <td class=num>${p.date?F(p.date):'—'}</td>
+      <td class="n num">${money(p.amt)}</td>
+    </tr>${!over?noteRows(p):''}`;
+  };
+  const overSum=sum(overs,p=>num(p.amt));
+  const overBlock=overs.length?`<tr class=grp><td colspan=4><button class=lk type=button aria-expanded=false onclick="toggleOverGrp(this)"><span class="k x">${F(overs.length)} مورد کسر مازاد</span><i></i></button></td><td class="n num">${money(overSum)}</td></tr>${overs.map(p=>payRow(p,'sub')).join('')}`:'';
+  return `<div class=pt>
+    <div class=pth>
+      <span>ریز پرداخت‌ها <span class=num>جمع ${money(total)} تومان</span></span>
+      ${can('write')?`<button class=lk type=button onclick="editPay('${i.id}')">ویرایش فیش‌ها</button>`:''}
+    </div>
+    <table>
+      <colgroup><col style="width:20%"><col style="width:24%"><col style="width:18%"><col style="width:16%"><col style="width:22%"></colgroup>
+      <thead><tr><th>نوع</th><th>مبدأ</th><th>کد پیگیری</th><th>تاریخ</th><th class=n>مبلغ (تومان)</th></tr></thead>
+      <tbody>
+        ${normals.map(p=>payRow(p)).join('')}${overBlock}
+      </tbody>
+    </table>
+    ${fee||isInstPaid(i)?`<div class=ptf><span>جریمه اعمال‌شده<b class=num>${money(fee)} تومان</b></span><span>قابل پرداخت<b class=num>${money(i.amt+fee)} تومان</b></span>${can('write')?`<button class=lk type=button onclick="editPay('${i.id}')">ویرایش جریمه / فیش‌ها</button>`:''}</div>`:''}
+  </div>`;
+}
 function instCardHtml(c,i){
   const paid=isInstPaid(i),partial=isInstPartial(i),rec=instReceived(i),remain=instRemain(i),pays=instPays(i);
-  const d=diff(i.date),editing=INST_EDIT===i.id&&can('write')&&!paid;
-  const tone=paid?'ok':partial?'warn':d<0?'bad':d<=7?'warn':'ok';
-  const label=paid?'پرداخت شد':partial?`مانده ${money(remain)}`:d<0?F(-d)+' روز تأخیر':d==0?'سررسید امروز':F(d)+' روز مانده';
-  const pct=instLatePct(c,i),ownPct=i.latePctDaily!=null&&i.latePctDaily!=='';
-  const estDays=paid?(Number(i.lateDays)||0):Math.max(0,-d);
-  const estCalc=paid?(Number(i.lateCalc)||0):calcLateFee(i.amt,pct,estDays);
-  const fee=Number(i.lateFee)||0;
+  const d=diff(i.date),editing=INST_EDIT===i.id&&can('write');
+  const ownPct=i.latePctDaily!=null&&i.latePctDaily!=='';
   if(editing){
-    return `<article class="ic edit">
+    return `<tr class="ir-edit"><td colspan=6>
       <div class=uc-edit-grid>
         <label class=span2>شرح قسط<input id=ie_title value="${esc(i.title||'')}"></label>
         <label>مبلغ<input id=ie_amt data-money inputmode=numeric value="${esc(money(i.amt))}" oninput="fmtMoney(this)"></label>
@@ -2281,148 +2563,168 @@ function instCardHtml(c,i){
         <label>جریمه دیرکرد روزانه (٪)<input id=ie_latepct inputmode=decimal placeholder="خالی = ${F(c.latePctDaily||0)}٪ قرارداد" value="${ownPct?esc(F(String(i.latePctDaily))):''}"></label>
         <label class=span2 style="display:flex;gap:8px;align-items:center"><input id=ie_lump type=checkbox style="width:auto" ${i.kind==='lump'||(typeof isLumpInst==='function'&&isLumpInst(i))?'checked':''}> الباقی نقدی (بند پایانی ماده ۵ قرارداد اجاره)</label>
       </div>
+      ${pays.length?`<p class=fd style="margin:10px 0 0">این قسط ${F(pays.length)} فیش دارد (جمع ${money(rec)} تومان). با ذخیره، فقط مشخصات قسط عوض می‌شود؛ برای تغییر فیش‌ها از «ویرایش فیش‌ها» استفاده کنید.</p>`:''}
       <div class=uc-actions>
-        <button class=pri onclick="saveInstEdit('${i.id}')">ذخیره قسط</button>
-        <button onclick="cancelInstEdit()">انصراف</button>
+        <button class="btn pri" type=button onclick="saveInstEdit('${i.id}')">ذخیره قسط</button>
+        ${pays.length?`<button class=btn type=button onclick="editPay('${i.id}')">ویرایش فیش‌ها</button>`:''}
+        <button class=btn type=button onclick="cancelInstEdit()">انصراف</button>
       </div>
-    </article>`;
+    </td></tr>`;
   }
-  return `<article class="ic ${paid?'paid':partial?'partial':d<0?'late':''}">
-    <header class=ic-head>
-      <div><b>${esc(i.title||'قسط')}</b>${i.kind==='lump'||(typeof isLumpInst==='function'&&isLumpInst(i))?' <span class="badge warn">الباقی</span>':''}${i.fromPayId?' <span class="badge ok">از رزرو</span>':''}<span class="badge ${tone}">${label}</span></div>
-      ${can('write')&&!paid?`<button class="icon-btn" title="ویرایش" onclick="startInstEdit('${i.id}')">✎</button>`:''}
-    </header>
-    <div class=ic-facts>
-      <div><span>مبلغ اصل</span><strong>${money(i.amt)} تومان</strong></div>
-      <div><span>سررسید</span><strong>${F(i.date)}</strong></div>
-      ${rec?`<div><span>پرداخت‌شده</span><strong class=ok-txt>${money(rec)} تومان</strong></div><div><span>مانده قسط</span><strong>${paid?'۰':money(remain)} تومان</strong></div>`:''}
-      ${pays.length?`<div class=span2><span>فیش‌ها</span><strong>${pays.map(p=>payLineHtml(p,c)).join('<br>')}</strong></div>`:''}
-      ${i.fromPayId&&i.payer?`<div class=span2><span>پرداخت‌کننده رزرو</span><strong>${esc(i.payer)}${i.acct?' · '+F(i.acct):''}</strong></div>`:''}
-      ${pct?`<div><span>نرخ جریمه</span><strong>${F(pct)}٪ روزانه${ownPct?'':' (قرارداد)'}</strong></div>`:''}
-      ${!paid&&estDays>0&&pct?`<div><span>تخمین جریمه تا امروز</span><strong>${money(estCalc)} تومان</strong></div><div><span>جزئیات</span><strong>${F(estDays)} روز × ${F(pct)}٪ × ${money(i.amt)}</strong></div>`:''}
-      ${paid&&(fee||estDays)?`<div><span>جریمه اعمال‌شده</span><strong>${money(fee)} تومان</strong></div><div><span>قابل پرداخت</span><strong>${money(i.amt+fee)} تومان</strong></div>`:''}
-    </div>
-    ${paid&&(fee||i.lateNote||estDays)?`<p class="fd late-doc">${esc(lateDocLine({...i,_latePctUsed:pct}))}</p>`:''}
-    <div class=ic-actions>
-      ${paid?`<button class=sm onclick="openRc('${c.id}','${i.id}')">رسید</button>${can('write')?`<button class=sm onclick="editPay('${i.id}')">ویرایش پرداخت</button><button class=sm onclick="unpay('${i.id}')">لغو پرداخت</button>`:''}`:
-        `${can('write')?`<button class="sm pri" onclick="pay('${i.id}')">${partial?'ادامه پرداخت':'ثبت پرداخت'}</button>${partial?`<button class=sm onclick="editPay('${i.id}')">ویرایش فیش‌ها</button>`:''}`:''}
-         ${canRefer()&&d<0?`<button class=sm onclick="referInst('${c.id}','${i.id}')">ارجاع</button>`:''}
-         ${can('write')&&!partial?`<button class="sm btn-ghost danger" onclick="delI('${i.id}')">حذف</button>`:''}`}
-    </div>
-  </article>`;
+  const lump=i.kind==='lump'||(typeof isLumpInst==='function'&&isLumpInst(i));
+  const pill=paid?'paid':partial?'part':d<0?'late':'next';
+  const label=paid?'پرداخت شد':partial?'پرداخت جزئی':d<0?`${F(-d)} روز تأخیر`:d==0?'سررسید امروز':`${F(d)} روز مانده`;
+  const dueCls=d<0&&!paid?'red':'';
+  const w=can('write');
+  const menuItems=[
+    w?`<button type=button onclick="startInstEdit('${i.id}')">ویرایش قسط</button>`:'',
+    w&&pays.length?`<button type=button onclick="editPay('${i.id}')">ویرایش فیش‌ها</button>`:'',
+    paid?`<button type=button onclick="openRc('${c.id}','${i.id}')">رسید</button>`:'',
+    !paid&&canRefer()&&d<0?`<button type=button onclick="referInst('${c.id}','${i.id}')">ارجاع</button>`:'',
+    w&&pays.length?`<button class=del type=button onclick="unpay('${i.id}')">لغو همه پرداخت‌ها</button>`:'',
+    w&&!pays.length?`<button class=del type=button onclick="delI('${i.id}')">حذف قسط</button>`:''
+  ].filter(Boolean).join('');
+  const primary=paid
+    ?(w?`<button class=btn type=button onclick="editPay('${i.id}')">ویرایش فیش‌ها</button>`:`<button class=btn type=button onclick="openRc('${c.id}','${i.id}')">رسید</button>`)
+    :(w?`<button class="btn ${partial||d<=0?'pri':''}" type=button onclick="pay('${i.id}')">${partial?'ادامه پرداخت':'پرداخت'}</button>`:'');
+  const secondary=w?(paid
+    ?`<button class=btn type=button onclick="startInstEdit('${i.id}')">ویرایش قسط</button>`
+    :partial
+      ?`<button class=btn type=button onclick="editPay('${i.id}')">ویرایش فیش‌ها</button>`
+      :`<button class=btn type=button onclick="startInstEdit('${i.id}')">ویرایش</button>`
+  ):'';
+  const payToggle=pays.length?`<br><button class=pay-n type=button aria-expanded=false data-detail="${esc(i.id)}" onclick="toggleInstDetail(this)">${F(pays.length)} پرداخت ثبت شده · مشاهده / ویرایش<i></i></button>`:'';
+  const detail=pays.length?`<tr class=detail id="d_${esc(i.id)}" hidden><td colspan=6>${cdPayDetailHtml(c,i)}</td></tr>`:'';
+  return `<tr class="row ${d<0&&!paid?'late':''}">
+    <td class=t><b>${esc(i.title||'قسط')}${lump?`<span class=tag>الباقی</span>`:''}${i.fromPayId?`<span class=tag>از رزرو</span>`:''}</b><small class="${dueCls}">سررسید ${F(i.date)}</small>${payToggle}</td>
+    <td><span class="pill ${pill}">${label}</span></td>
+    <td class="n num">${money(i.amt)}</td>
+    <td class="n">${rec?`<span class="num ok">${money(rec)}</span>${partial?`<div class=mini><i style="width:${Math.min(100,Math.round(rec/Math.max(1,num(i.amt))*100))}%"></i></div>`:''}`:`<span class="num dim">—</span>`}</td>
+    <td class="n num ${paid?'dim':''}">${paid?'۰':money(remain)}</td>
+    <td><div class=acts>${primary}${secondary}${menuItems?`<div class=mn><button class=ic type=button aria-label="گزینه‌های بیشتر" onclick="event.stopPropagation();toggleCdMn(this)">⋯</button><div class=menu>${menuItems}</div></div>`:''}</div></td>
+  </tr>${detail}`;
 }
 function cd(){
   const c=S.contracts.find(x=>x.id==V.id);if(!c)return cont();
+  if(purgeEmptyInstDrafts(c,INST_EDIT))save();
   if(INST_EDIT&&!(c.inst||[]).some(i=>i.id===INST_EDIT))INST_EDIT=null;
   const cu=cust(c.cust),p=paidSum(c),fees=lateSum(c),all=sum(c.inst||[],i=>i.amt),rem=Math.max(0,c.total-p),pct=c.total>0?Math.min(100,Math.round(p/c.total*100)):0;
   const ist=instStats(c),unpaid=(c.inst||[]).filter(i=>!isInstPaid(i)),late=unpaid.filter(i=>diff(i.date)<0);
-  const st=contStatus(c),chip=st.k==='bad'?'late':!unpaid.length?'paid':'next';
-  const av=(cu.name||'؟').trim().charAt(0);
+  const st=contStatus(c),chip=st.k==='bad'?'late':!unpaid.length?'paid':st.k==='warn'?'next':'paid';
   const pr=proj(c.proj),u=unitOf(c.proj,c.unit);
-  const fig=(k,v)=>`<dt>${k}</dt><dd>${v}</dd>`;
-  return `<div class=pd>
-  <div class=pd-bar>
-    <button class=btn-ghost onclick="go('cont')">بازگشت ←</button>
-    <div class="pd-bar-actions cd-tools noprint">
-      <button class=btn-soft onclick="openDoc('${c.id}','c')">متن قرارداد</button>
-      ${c.type==='lease'&&can('write')?`<button class=btn-soft onclick="editLeaseDoc('${c.id}')">تکمیل فیلدهای قرارداد</button>`:''}
-      ${c.type==='invest'&&can('write')?`<button class=btn-soft onclick="editInvestDoc('${c.id}')">تکمیل فیلدهای قرارداد</button>`:''}
-      <button class=btn-ghost onclick="openDoc('${c.id}','sched')">چاپ جدول اقساط</button>
-      <button class=btn-ghost onclick="openDoc('${c.id}','p')">فرم پرداخت</button>
-      <button class=btn-ghost onclick="openDoc('${c.id}','dm')">اظهارنامه</button>
-      ${canRefer()?`<button class=btn-soft onclick="referContract('${c.id}')">ارجاع سازمانی</button>`:''}
-      ${can('write')?`<span class=vr></span>
-      <button class=btn-ghost onclick="editC('${c.id}')">ویرایش</button>
-      <button class=btn-ghost onclick="regen('${c.id}')">بازسازی اقساط</button>
-      <button class=btn-ghost onclick="setDay('${c.id}')">روز ثابت</button>
-      <span class=vr></span>
-      <button class="btn-ghost danger" onclick="delC('${c.id}')">حذف</button>`:''}
+  const open=!!(INST_OPEN||INST_EDIT);
+  const n=(c.inst||[]).length;
+  const remainInst=ist.unpaid+ist.partial;
+  const menuDocs=`
+    <button type=button onclick="openDoc('${c.id}','c')"><span>متن قرارداد</span></button>
+    ${c.type==='lease'&&can('write')?`<button type=button onclick="editLeaseDoc('${c.id}')"><span>تکمیل فیلدهای قرارداد</span></button>`:''}
+    ${c.type==='invest'&&can('write')?`<button type=button onclick="editInvestDoc('${c.id}')"><span>تکمیل فیلدهای قرارداد</span></button>`:''}
+    <button type=button onclick="openDoc('${c.id}','sched')"><span>چاپ جدول اقساط</span></button>
+    <button type=button onclick="openDoc('${c.id}','p')"><span>فرم پرداخت</span></button>
+    <button type=button onclick="openDoc('${c.id}','dm')"><span>اظهارنامه</span></button>
+    ${canRefer()?`<button type=button onclick="referContract('${c.id}')"><span>ارجاع سازمانی</span></button>`:''}`;
+  const menuEdit=can('write')?`<div class=sep></div>
+    <button type=button onclick="editC('${c.id}')"><span>ویرایش قرارداد</span></button>
+    <button type=button onclick="regen('${c.id}')"><span>بازسازی اقساط</span></button>
+    <button type=button onclick="setDay('${c.id}')"><span>روز ثابت سررسید</span></button>
+    <div class=sep></div>
+    <button class=del type=button onclick="delC('${c.id}')"><span>حذف قرارداد</span></button>`:'';
+  return `<div class=cd-page>
+  <div class="cd-bar noprint">
+    <button class=btn type=button onclick="go('cont')">بازگشت</button>
+    <div class=cd-actions id=cdActions>
+      <button type=button class=cd-actions-tog aria-haspopup=true aria-expanded=false onclick="event.stopPropagation();toggleCdActions(this)">
+        <span class=burger aria-hidden=true><i></i><i></i><i></i></span>
+        عملیات پرونده
+      </button>
+      <div class=cd-actions-panel role=menu>${menuDocs}${menuEdit}</div>
     </div>
   </div>
 
-  <article class=file>
-    <header class=file-head>
+  <header class=head>
+    <h1>قرارداد ${esc(c.no)} <span class="chip ${chip}">${esc(st.l)}</span></h1>
+    <p>${esc(typeName(c.type))} · شروع ${F(c.date)}${c.dur?` · مدت ${F(c.dur)} ماه`:''}</p>
+    ${c.resId?(()=>{const rr=S.reservations.find(x=>x.id===c.resId);return rr?`<p>تبدیل‌شده از رزرو <button class=lk type=button onclick="go('rd','${rr.id}')">${esc(rr.no)}</button></p>`:'<p>تبدیل‌شده از رزرو (حذف‌شده)</p>';})():''}
+    ${c.note?`<p>${esc(c.note)}</p>`:''}
+    ${c.type==='lease'&&typeof leaseMissing==='function'&&leaseMissing(c).length?`<p class=warn-line>برای چاپ رسمی هنوز کامل نیست: ${esc(leaseMissing(c).join('، '))}</p>`:''}
+    ${c.type==='invest'&&typeof investMissing==='function'&&investMissing(c).length?`<p class=warn-line>برای چاپ رسمی هنوز کامل نیست: ${esc(investMissing(c).join('، '))}</p>`:''}
+  </header>
+
+  <section class=card>
+    <div class=figs>
+      <div class=fig><small>مبلغ کل</small><b class=num>${money(c.total)}<span class=unit>تومان</span></b></div>
+      <div class="fig paid"><small>پرداخت‌شده</small><b class=num>${money(p)}<span class=unit>تومان</span></b></div>
+      <div class=fig><small>مانده</small><b class=num>${money(rem)}<span class=unit>تومان</span></b></div>
+    </div>
+    <div class=bar>
+      <div class=track role=progressbar aria-valuenow="${pct}" aria-valuemin=0 aria-valuemax=100><i style="width:${pct}%"></i></div>
+      <p><span>${F(pct)}٪ از مبلغ قرارداد پرداخت شده${fees?` · جریمه وصول‌شده ${money(fees)}`:''}</span><span>${F(ist.paid)} قسط از ${F(ist.total)} قسط تسویه شده</span></p>
+    </div>
+    ${(c.extraOn||c.profitOn||num(c.baseTotal))?`<div class=bar style="padding-top:0">
+      <p style="margin:0"><span>قیمت پایه ${money(c.baseTotal||c.total)}</span>${c.extraOn?`<span>مازاد ${F(c.extraPct||INST_EXTRA_PCT)}٪ · ${money(c.extraAmt||0)}</span>`:''}${c.profitOn?`<span>سود ${F(c.profitPct||INST_PROFIT_PCT)}٪ · ${money(c.profitAmt||0)}</span>`:''}</p>
+    </div>`:''}
+    ${Number(c.latePctDaily)?`<div class=bar style="padding-top:0"><p style="margin:0">نرخ جریمه دیرکرد: <b>${F(c.latePctDaily)}٪</b> روزانه از مبلغ هر قسط</p></div>`:''}
+    ${all!=c.total?`<div class=bar style="padding-top:0"><p class=warn-line style="margin:0;width:100%">جمع اقساط (${money(all)}) با مبلغ کل قرارداد (${money(c.total)}) برابر نیست.</p></div>`:''}
+    <div class=parties>
       <div>
-        <div class=dossier-k>پرونده قرارداد</div>
-        <div class=title-row>
-          <h2>${esc(c.no)}</h2>
-          <span class="chip ${chip}">${esc(st.l)}</span>
-        </div>
-        <p class=dossier-addr>${esc(typeName(c.type))} · از ${F(c.date)}${c.dur?` · ${F(c.dur)} ماهه`:''}</p>
-        ${c.resId?(()=>{const rr=S.reservations.find(x=>x.id===c.resId);return rr?`<p class=dossier-note>تبدیل‌شده از رزرو <button class="sm btn-soft" onclick="go('rd','${rr.id}')">${esc(rr.no)}</button></p>`:'<p class=dossier-note>تبدیل‌شده از رزرو (حذف‌شده)</p>';})():''}
-        ${c.note?`<p class=dossier-note>${esc(c.note)}</p>`:''}
-        ${c.type==='lease'&&typeof leaseMissing==='function'&&leaseMissing(c).length?`<p class=warn-line>برای چاپ رسمی هنوز کامل نیست: ${esc(leaseMissing(c).join('، '))}</p>`:''}
-        ${c.type==='invest'&&typeof investMissing==='function'&&investMissing(c).length?`<p class=warn-line>برای چاپ رسمی هنوز کامل نیست: ${esc(investMissing(c).join('، '))}</p>`:''}
-      </div>
-      ${can('write')?`<button class="icon-btn lg" title="ویرایش قرارداد" onclick="editC('${c.id}')">✎</button>`:''}
-    </header>
-
-    <section class=pay-block aria-label="وضعیت پرداخت">
-      <div class=pay-row>
-        <div><small>مبلغ کل</small><b>${money(c.total)}<span>تومان</span></b></div>
-        <div><small>پرداخت‌شده</small><b class=ok-txt>${money(p)}<span>تومان</span></b></div>
-        <div class=rem><small>مانده</small><b>${money(rem)}<span>تومان</span></b></div>
-      </div>
-      <div class=pay-meter role=progressbar aria-valuemin=0 aria-valuemax=100 aria-valuenow="${pct}"><i style="width:${pct}%"></i></div>
-      <div class=pnote>${F(pct)}٪ از مبلغ قرارداد پرداخت شده است${fees?` · جریمه دیرکرد وصول‌شده ${money(fees)} تومان`:''}</div>
-      <div class=inst-stat-bar>اقساط پرداخت‌شده <b>${F(ist.paid)}</b> از <b>${F(ist.total)}</b> · باقی‌مانده <b>${F(ist.unpaid+ist.partial)}</b></div>
-      ${(c.extraOn||c.profitOn||num(c.baseTotal))?`<div class=cprice-sum style="margin-top:10px">
-        <div><span>قیمت پایه</span><b>${money(c.baseTotal||c.total)} تومان</b></div>
-        ${c.extraOn?`<div><span>هزینه مازاد ${F(c.extraPct||INST_EXTRA_PCT)}٪</span><b>+ ${money(c.extraAmt||0)} تومان</b></div>`:''}
-        ${c.profitOn?`<div><span>سود ${F(c.profitPct||INST_PROFIT_PCT)}٪</span><b>+ ${money(c.profitAmt||0)} تومان</b></div>`:''}
-        <div class=cprice-sum-final><span>مبلغ نهایی</span><b>${money(c.total)} تومان</b></div>
-      </div>`:''}
-      ${Number(c.latePctDaily)?`<p class=fd style="margin:6px 0 0">نرخ پیش‌فرض جریمه دیرکرد: <b>${F(c.latePctDaily)}٪</b> از مبلغ هر قسط به‌ازای هر روز تأخیر</p>`:''}
-      ${all!=c.total?`<p class=warn-line>جمع اقساط (${money(all)}) با مبلغ کل قرارداد (${money(c.total)}) برابر نیست.</p>`:''}
-    </section>
-
-    <div class=file-cols>
-      <section class=file-sec>
-        <h3 class=file-h>خریدار</h3>
-        <div class=coord>
-          <div class=av aria-hidden=true>${esc(av)}</div>
-          <div>
-            <b>${esc(cu.name)}</b>
-            <a class=ph href="tel:${N(cu.phone||'')}">${F(cu.phone||'—')}</a>
-          </div>
-        </div>
-        <dl class=fig>
-          ${fig('کد ملی',F(cu.nid||'—'))}
-          ${fig('نام پدر',esc(cu.father||'—'))}
+        <h3>خریدار</h3>
+        <dl class=kv>
+          <div><dt>نام</dt><dd>${esc(cu.name||'—')}</dd></div>
+          <div><dt>تلفن</dt><dd class=num>${cu.phone?`<a class=ph href="tel:${N(cu.phone)}">${F(cu.phone)}</a>`:'—'}</dd></div>
+          <div><dt>کد ملی</dt><dd class=num>${F(cu.nid||'—')}</dd></div>
+          <div><dt>نام پدر</dt><dd>${esc(cu.father||'—')}</dd></div>
         </dl>
-        ${cu.id?`<button class="sm btn-soft" style="margin-top:12px" onclick="go('cv','${cu.id}')">پرونده مشتری</button>`:''}
-      </section>
-      <section class=file-sec>
-        <h3 class=file-h>واحد و اقساط</h3>
-        <dl class=fig>
-          ${fig('پروژه',esc(pr?.name||'—'))}
-          ${fig('واحد',esc(u.no||'—')+(u.area?` · ${F(u.area)} م²`:''))}
-          ${fig('اقساط',`<b>${F(ist.paid)}</b> پرداخت‌شده از ${F(ist.total)} · باقی ${F(ist.unpaid+ist.partial)}`)}
-          ${fig('اقساط معوق',late.length?`<span class="chip late">${F(late.length)}</span>`:F(0))}
+        ${cu.id?`<div class=lnk><button class=lk type=button onclick="go('cv','${cu.id}')">پرونده مشتری</button></div>`:''}
+      </div>
+      <div>
+        <h3>واحد</h3>
+        <dl class=kv>
+          <div><dt>پروژه</dt><dd>${esc(pr?.name||'—')}</dd></div>
+          <div><dt>شماره</dt><dd class=num>${esc(u.no||'—')}</dd></div>
+          <div><dt>متراژ</dt><dd class=num>${u.area?`${F(u.area)} متر`:'—'}</dd></div>
         </dl>
-      </section>
-    </div>
-    ${u.dangSplit?`<section class="file-sec dang-sec">${unitOwnersViewHtml(u,{primaryCustId:c.cust})}</section>`:''}
-  </article>
-
-  <section class="units-panel noprint">
-    <div class=u-head>
-      <h3>جدول اقساط <span class=count>${F((c.inst||[]).length)}</span></h3>
-      <div class=u-tools>
-        ${can('write')?`<label class=sw><input type=checkbox ${c.auto!==false?'checked':''} onchange="setAuto('${c.id}',this.checked)"><span>محاسبه خودکار مانده</span></label>
-        <button class="btn-soft sm" onclick="addI('${c.id}')"><span class=plus>+</span> ردیف جدید</button>`:''}
       </div>
     </div>
-    <div class=inst-pad>
-      ${(c.inst||[]).length?`<div class=inst-grid>${(c.inst||[]).map(i=>instCardHtml(c,i)).join('')}</div>`:empty('هنوز قسطی ثبت نشده است. با «ردیف جدید» یک قسط اضافه کنید.')}
+    ${u.dangSplit?`<div class=dang-wrap>${unitOwnersViewHtml(u,{primaryCustId:c.cust})}</div>`:''}
+  </section>
+
+  <section class="card noprint" id=instPanel>
+    <div class=ihead>
+      <button class=tg id=instTog type=button aria-expanded="${open?'true':'false'}" aria-controls=instBody onclick="toggleInstPanel()"><span class=chev aria-hidden=true></span><h2>اقساط</h2></button>
+      <div class=sum>
+        <span class=a>${F(ist.paid)} پرداخت‌شده</span>
+        <span>${F(remainInst)} باقی‌مانده</span>
+        ${late.length?`<span class=r>${F(late.length)} معوق</span>`:''}
+      </div>
+      ${can('write')?`<label class="sw auto-lab"><input type=checkbox ${c.auto!==false?'checked':''} onchange="setAuto('${c.id}',this.checked)"><span>محاسبه خودکار</span></label>
+      <button class=btn type=button onclick="addI('${c.id}')">+ قسط جدید</button>`:''}
+    </div>
+    <div id=instBody ${open?'':'hidden'}>
+      ${n?`<table class=main>
+        <colgroup><col style="width:21%"><col style="width:14%"><col style="width:14%"><col style="width:15%"><col style="width:14%"><col style="width:22%"></colgroup>
+        <thead><tr><th>قسط</th><th>وضعیت</th><th class=n>مبلغ (تومان)</th><th class=n>پرداخت‌شده</th><th class=n>مانده</th><th></th></tr></thead>
+        <tbody>${(c.inst||[]).map(i=>instCardHtml(c,i)).join('')}</tbody>
+      </table>`:empty('هنوز قسطی ثبت نشده است. با «قسط جدید» یک ردیف اضافه کنید.')}
     </div>
   </section>
+
+  ${attachPanelShell(c.cust,c.id)}
   ${facV(c)}
- </div>`;
+</div>`;
 }
 const gi=id=>{for(const c of S.contracts){const i=c.inst.find(x=>x.id==id);if(i)return[c,i]}};
-function startInstEdit(id){INST_EDIT=id;render()}
-function cancelInstEdit(){INST_EDIT=null;render()}
+function startInstEdit(id){INST_EDIT=id;INST_OPEN=true;render()}
+function cancelInstEdit(){
+  const id=INST_EDIT;INST_EDIT=null;
+  if(id){
+    const pair=gi(id);
+    if(pair&&isEmptyInstDraft(pair[1])){
+      pair[0].inst=pair[0].inst.filter(x=>x.id!==id);
+      save();
+    }
+  }
+  render();
+}
 function saveInstEdit(id){
   const pair=gi(id);if(!pair)return;const[c,i]=pair;
   const title=($('#ie_title')?.value||'').trim();
@@ -2430,14 +2732,19 @@ function saveInstEdit(id){
   const date=normJ($('#ie_date')?.value||'');
   const lump=!!$('#ie_lump')?.checked;
   const lateRaw=($('#ie_latepct')?.value||'').trim();
+  const rec=instReceived(i);
   if(!title)return toast('شرح قسط را وارد کنید');
   if(!date)return toast('سررسید معتبر نیست');
-  askConfirm({title:'تأیید ذخیره قسط',body:`<p>«${esc(title)}» به مبلغ <b>${money(amt)}</b> و سررسید <b>${F(date)}</b> ذخیره شود؟</p>`},()=>{
+  if(amt<0)return toast('مبلغ قسط معتبر نیست');
+  const warnRec=rec>0&&amt<rec?`<p class=fd>جمع فیش‌های ثبت‌شده (${money(rec)}) از مبلغ جدید بیشتر است؛ قسط به‌صورت اضافه‌پرداخت‌شده می‌ماند تا فیش‌ها را ویرایش کنید.</p>`:'';
+  askConfirm({title:'تأیید ذخیره قسط',body:`<p>«${esc(title)}» به مبلغ <b>${money(amt)}</b> و سررسید <b>${F(date)}</b> ذخیره شود؟</p>${warnRec}`},()=>{
     i.amt=amt;i.date=date;i.kind=lump?'lump':'';
     if(lateRaw==='')delete i.latePctDaily;else i.latePctDaily=num(lateRaw);
     if(lump){i.title=/الباقی|نقدی/.test(title)?title:'الباقی نقدی'}
     else{i.title=title==='الباقی نقدی'?'قسط':title}
-    if(c.auto!==false&&!isInstPaid(i)&&!lump)redist(c,i);
+    syncInstPaid(i);
+    if(!isInstPaid(i))clearLateFields(i);
+    if(c.auto!==false&&!isInstPaid(i)&&!isInstPartial(i)&&!lump)redist(c,i);
     c.inst.sort((a,b)=>a.date<b.date?-1:1);
     if(c.ed)delete c.ed.c;
     INST_EDIT=null;save();render();toast('قسط ذخیره شد');return true;
@@ -2477,7 +2784,7 @@ function openPayModal(id,opts){
     const overFrom=row.dataset.overFrom||'';
     const amt=num(row.querySelector('[data-k=amt]')?.value);
     const date=normJ(row.querySelector('[data-k=date]')?.value||'')||'';
-    const ref=overFrom?'':(row.querySelector('[data-k=ref]')?.value||'').trim();
+    const ref=(row.querySelector('[data-k=ref]')?.value||'').trim();
     let note=(row.querySelector('[data-k=note]')?.value||'').trim();
     if(note.startsWith('overpay:'))note=payNoteLabel({note,overFrom,amt},c);
     if(overFrom&&(!note||note.startsWith('overpay:'))){
@@ -2490,12 +2797,12 @@ function openPayModal(id,opts){
     const over=!!p.overFrom;
     return `<div class=ipay-row data-id="${esc(p.id)}" data-over-from="${esc(p.overFrom||'')}">
     <div class=ipay-main>
-      <label>مبلغ<input data-k=amt data-money inputmode=numeric value="${esc(p.amt?money(p.amt):'')}" placeholder="۰" ${over?'readonly':''}></label>
+      <label>مبلغ${over?` <small class=fd>(کسر مازاد)</small>`:''}<input data-k=amt data-money inputmode=numeric value="${esc(p.amt?money(p.amt):'')}" placeholder="۰"></label>
       <label>تاریخ<input data-k=date readonly style="cursor:pointer" value="${F(p.date||todayJ())}"></label>
-      <label>شماره پیگیری<input data-k=ref value="${esc(over?'':(p.ref||''))}" placeholder="${over?'— کسر مازاد —':'فیش / پیگیری'}" ${over?'readonly':''}></label>
+      <label>شماره پیگیری<input data-k=ref value="${esc(p.ref||'')}" placeholder="${over?'اختیاری · کسر مازاد':'فیش / پیگیری'}"></label>
       <button type=button class="icon-btn ipay-del" title="حذف این پرداخت" aria-label="حذف">×</button>
     </div>
-    <label class=ipay-note>یادداشت<input data-k=note value="${esc(p.note||'')}" placeholder="اختیاری" ${over?'readonly':''}></label>
+    <label class=ipay-note>یادداشت<input data-k=note value="${esc(p.note||'')}" placeholder="${over?'توضیح کسر مازاد':'اختیاری'}"></label>
   </div>`;
   };
   const paint=()=>{
@@ -2653,7 +2960,7 @@ function openPayModal(id,opts){
         id:p.id||uid(),
         amt:num(p.amt),
         date:p.date,
-        ref:p.overFrom?'':(p.ref||''),
+        ref:p.ref||'',
         note:p.note||'',
         overFrom:p.overFrom||''
       }));
@@ -2673,7 +2980,14 @@ const pay=id=>openPayModal(id);
 const editPay=id=>openPayModal(id,{edit:true});
 const unpay=id=>{askConfirm({title:'لغو پرداخت',body:'همه فیش‌های این قسط پاک شود و اعتبار اضافه‌پرداخت روی اقساط بعدی هم برداشته شود؟',okLabel:'بله، لغو شود',danger:true},()=>{const pair=gi(id);if(!pair)return false;const[c,i]=pair;stripOverpayCredits(c,i.id);i.pays=[];i.paid=false;i.pdate='';i.ref='';clearLateFields(i);save();render();return true})};
 const delI=id=>{const pair=gi(id);if(!pair)return;if(isInstPartial(pair[1])||isInstPaid(pair[1]))return toast('اول پرداخت‌های این قسط را لغو کنید');askConfirm({title:'حذف قسط',body:`<p>ردیف «${esc(pair[1].title||'قسط')}» حذف شود؟</p>`,okLabel:'بله، حذف شود',danger:true},()=>{pair[0].inst=pair[0].inst.filter(i=>i.id!=id);if(INST_EDIT===id)INST_EDIT=null;save();render();return true})};
-const addI=cid=>{const c=S.contracts.find(x=>x.id==cid);if(!c)return;c.inst.push({id:uid(),title:'ردیف جدید',amt:0,date:todayJ(),paid:false,pdate:'',ref:'',pays:[],lateDays:0,lateCalc:0,lateFee:0,lateNote:''});INST_EDIT=c.inst[c.inst.length-1].id;save();render()};
+const addI=cid=>{
+  const c=S.contracts.find(x=>x.id==cid);if(!c)return;
+  purgeEmptyInstDrafts(c);
+  c.inst.push({id:uid(),title:'قسط',amt:0,date:todayJ(),paid:false,pdate:'',ref:'',pays:[],lateDays:0,lateCalc:0,lateFee:0,lateNote:''});
+  INST_EDIT=c.inst[c.inst.length-1].id;
+  INST_OPEN=true;
+  save();render();
+};
 function restoreReservationAfterContract(c){
   if(!c?.resId)return null;
   const r=S.reservations.find(x=>x.id===c.resId);
@@ -3490,28 +3804,233 @@ const toCust=id=>{const l=S.leads.find(x=>x.id==id);form('ثبت به‌عنوا
 })};
 // تسهیلات و تحویل
 const FD=['اوراق','رهن','کارشناسی','بیمه','مالیات','سایر هزینه‌ها و امور اداری'],HS=['—','واحد آماده – در انتظار تحویل','پروژه در حال ساخت','تحویل شد'],cc=id=>S.contracts.find(c=>c.id==id);
-const setFac=(id,v)=>{const c=cc(id);if(!c)return;c.fac=v?FD.map(t=>({t,cost:0,done:false})):undefined;save();render()},setHand=(id,v)=>{const c=cc(id);if(!c)return;c.hand=v;save()},setF=(id,i,k,v)=>{const c=cc(id);if(!c||!c.fac||!c.fac[i])return;c.fac[i][k]=v;save();if(k=='done')render()};
-function facV(c){const f=c.fac;return `<section class="units-panel noprint">
-  <div class=u-head><h3>تسهیلات و تحویل</h3></div>
-  <div class=fac-fields>
-    <div>
-      <label class=fac-l>خرید با تسهیلات</label>
-      <label class="fac-sw sw"><span>فعال</span><input type=checkbox ${f?'checked':''} onchange="setFac('${c.id}',this.checked)" ${can('write')?'':'disabled'}></label>
+const setFac=(id,v)=>{const c=cc(id);if(!c)return;c.fac=v?FD.map(t=>({t,cost:0,done:false})):undefined;save();render()},setHand=(id,v)=>{const c=cc(id);if(!c)return;c.hand=v;save()},setF=(id,i,k,v)=>{
+  const c=cc(id);if(!c||!c.fac||!c.fac[i])return;c.fac[i][k]=v;save();
+  if(k==='done'){render();return}
+  const foot=$('#fac .ffoot');if(!foot)return;
+  const tot=sum(c.fac,x=>x.cost),doneN=c.fac.filter(x=>x.done).length,pct=c.fac.length?Math.round(doneN/c.fac.length*100):0;
+  const nums=foot.querySelectorAll('b.num');
+  if(nums[0])nums[0].textContent=money(tot)+' تومان';
+  if(nums[1])nums[1].textContent=F(doneN)+' از '+F(c.fac.length);
+  const bar=foot.querySelector('.track i');if(bar)bar.style.width=pct+'%';
+};
+function facV(c){
+  const f=c.fac,doneN=f?f.filter(x=>x.done).length:0,tot=f?sum(f,x=>x.cost):0,pct=f&&f.length?Math.round(doneN/f.length*100):0;
+  const w=can('write');
+  return `<section class="card noprint" id=fac>
+  <div class=ihead><h2>تسهیلات و تحویل</h2></div>
+  <div class=ctrls>
+    <div><span class=lbl>خرید با تسهیلات</span>
+      <div class=box>
+        <button class=sw-btn type=button role=switch aria-checked="${f?'true':'false'}" aria-label="خرید با تسهیلات" ${w?`onclick="setFac('${c.id}',${!f})"`:'disabled'}></button>
+        <span>${f?'فعال':'غیرفعال'}</span>
+      </div>
     </div>
     <div>
-      <label class=fac-l for="hand-${c.id}">وضعیت تحویل</label>
-      <select id="hand-${c.id}" onchange="setHand('${c.id}',this.value)" ${can('write')?'':'disabled'}>${HS.map(x=>`<option ${c.hand==x?'selected':''}>${x}</option>`).join('')}</select>
+      <label class=lbl for="hand-${c.id}">وضعیت تحویل</label>
+      <select class=sel id="hand-${c.id}" onchange="setHand('${c.id}',this.value)" ${w?'':'disabled'}>${HS.map(x=>`<option ${c.hand==x?'selected':''}>${x}</option>`).join('')}</select>
     </div>
   </div>
-  ${f?`<div class=fac-table>${tbl(['اقدام','هزینه (تومان)','انجام شد'],f.map((x,i)=>`<tr><td>${x.t}</td><td><input data-money inputmode=numeric oninput="fmtMoney(this)" value="${x.cost?money(x.cost):''}" onchange="setF('${c.id}',${i},'cost',num(this.value))" ${can('write')?'':'readonly'}></td><td><input type=checkbox style="width:auto" ${x.done?'checked':''} onchange="setF('${c.id}',${i},'done',this.checked)" ${can('write')?'':'disabled'}></td></tr>`).join(''))}<p class=fd style="padding:0 18px 14px">جمع هزینه‌ها: ${T(sum(f,x=>x.cost))} | انجام‌شده: ${F(f.filter(x=>x.done).length)} از ${F(f.length)}</p></div>`:''}
-</section>`}
+  ${f?`<table class="main fac">
+    <colgroup><col style="width:40%"><col style="width:42%"><col style="width:18%"></colgroup>
+    <thead><tr><th>اقدام</th><th>هزینه (تومان)</th><th class=c>انجام شد</th></tr></thead>
+    <tbody>${f.map((x,i)=>`<tr class="${x.done?'is-done':''}">
+      <td>${esc(x.t)}</td>
+      <td><label class=inp><input class=cost data-money inputmode=numeric placeholder="۰" aria-label="هزینه ${esc(x.t)}" value="${x.cost?money(x.cost):''}" oninput="fmtMoney(this)" onchange="setF('${c.id}',${i},'cost',num(this.value))" ${w?'':'readonly'}><span>تومان</span></label></td>
+      <td class=c><input type=checkbox class=done ${x.done?'checked':''} aria-label="${esc(x.t)} انجام شد" onchange="setF('${c.id}',${i},'done',this.checked)" ${w?'':'disabled'}></td>
+    </tr>`).join('')}</tbody>
+  </table>
+  <div class=ffoot>
+    <span>جمع هزینه‌ها<b class=num>${money(tot)} تومان</b></span>
+    <span>انجام‌شده<b class=num>${F(doneN)} از ${F(f.length)}</b></span>
+    <div class=track role=progressbar aria-label="پیشرفت اقدام‌ها"><i style="width:${pct}%"></i></div>
+  </div>`:''}
+</section>`;
+}
 // پرونده مشتری، گزارش‌ها، پشتیبان
 const KY=['تصویر کارت ملی','تصویر شناسنامه','شبا/حساب بانکی متعلق به خود مشتری','نشانی و شماره تماس تأییدشده','فرم اعلام پرداخت امضاشده'];
+const ATTACH_KINDS=[
+  {k:'contract_signed',l:'قرارداد امضاشده'},
+  {k:'installment_signed',l:'جدول اقساط امضاشده'},
+  {k:'payment_receipt',l:'فیش / رسید پرداخت'},
+  {k:'id_card',l:'مدارک هویتی'},
+  {k:'other',l:'سایر اسناد'},
+];
+const ATTACH_KIND_L=Object.fromEntries(ATTACH_KINDS.map(x=>[x.k,x.l]));
+let ATTACH_STATE={custId:'',contractId:'',items:[],loading:false,error:''};
 const setK=(id,k,v)=>{const c=cust(id);if(!c.id)return;(c.kyc=c.kyc||{})[k]=!!v;if(!v)delete c.kyc[k];save();render()};
 const addN=id=>form('ثبت تماس / یادداشت',[{k:'d',l:'تاریخ',d:todayJ(),j:1,r:1},{k:'t',l:'شرح تماس یا پیگیری',t:'area',w:1,r:1},{k:'by',l:'ثبت‌کننده',r:1,d:S.me||ME.name||''}],0,v=>{S.me=v.by;const c=cust(id);if(!c.id)return false;(c.notes=c.notes||[]).push(v);save();render()});
+function attachSizeLabel(n){
+  const b=Number(n)||0;
+  if(b<1024)return F(b)+' B';
+  if(b<1024*1024)return F(Math.round(b/102.4)/10)+' KB';
+  return F(Math.round(b/104857.6)/10)+' MB';
+}
+function attachPanelShell(custId,contractId){
+  const scope=contractId?'قرارداد':'مشتری';
+  if(contractId){
+    return `<section class="card noprint" id=docs>
+      <div class=ihead>
+        <h2>اسناد و اسکن‌ها<span class="cnt num" id=attachCount>۰</span></h2>
+        ${can('write')?`<button class=btn type=button onclick="openAttachUpload('${esc(custId)}','${esc(contractId)}')">+ بارگذاری سند</button>`:''}
+      </div>
+      <p class=hint>تصاویر قرارداد امضاشده، جدول اقساط، فیش‌ها و رسیدها اینجا بایگانی می‌شوند تا با باز کردن پرونده قرارداد در دسترس باشند.</p>
+      <div class=drop id=attachDrop ${can('write')?`onclick="openAttachUpload('${esc(custId)}','${esc(contractId)}')"`:''}>
+        <b>برای این قرارداد هنوز سندی نیست</b>
+        <p>فایل را اینجا بکشید یا از پرونده مشتری هم می‌توانید بارگذاری کنید.</p>
+        ${can('write')?`<button class=btn type=button onclick="event.stopPropagation();openAttachUpload('${esc(custId)}','${esc(contractId)}')">انتخاب فایل</button>`:''}
+      </div>
+      <ul class=files id=attachFiles></ul>
+      <div id=attachPanel data-cust="${esc(custId)}" data-contract="${esc(contractId)}" hidden></div>
+      <div id=attachList hidden></div>
+    </section>`;
+  }
+  return `<section class="attach-panel" id=attachPanel data-cust="${esc(custId)}" data-contract="">
+    <div class=u-head>
+      <h3>اسناد و اسکن‌ها <span class=count id=attachCount>—</span></h3>
+      <div class=u-tools>
+        ${can('write')?`<button type=button class="btn-soft sm" onclick="openAttachUpload('${esc(custId)}','')"><span class=plus>+</span> بارگذاری سند</button>`:''}
+      </div>
+    </div>
+    <p class=fd style="margin:0 0 10px">تصاویر قرارداد امضاشده، جدول اقساط، فیش‌ها و رسیدها اینجا بایگانی می‌شوند تا با باز کردن پرونده ${scope} در دسترس باشند.</p>
+    <div id=attachList class=attach-list><div class=fd>در حال بارگذاری اسناد…</div></div>
+  </section>`;
+}
+function attachFilesListHtml(items){
+  return items.map(a=>{
+    const title=a.title||a.originalName||ATTACH_KIND_L[a.kind]||'سند';
+    return `<li>
+      <span><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(title)}</a></span>
+      <span class=num>${attachSizeLabel(a.size)}</span>
+      ${can('write')?`<button class=lk type=button onclick="delAttachment('${esc(a.id)}')">حذف</button>`:''}
+    </li>`;
+  }).join('');
+}
+function attachCardsHtml(items,opts){
+  opts=opts||{};
+  if(!items.length)return empty(opts.empty||'سندی بارگذاری نشده است.');
+  return `<div class=attach-grid>${items.map(a=>{
+    const isImg=/^image\//.test(a.mime||'');
+    const title=a.title||a.originalName||ATTACH_KIND_L[a.kind]||'سند';
+    const when=a.createdAt?F(new Date(a.createdAt).toLocaleDateString('fa-IR')):'';
+    return `<article class=attach-card>
+      <a class=attach-thumb href="${esc(a.url)}" target="_blank" rel="noopener">
+        ${isImg?`<img src="${esc(a.url)}" alt="${esc(title)}" loading="lazy">`:`<span class=attach-file>PDF</span>`}
+      </a>
+      <div class=attach-meta>
+        <b>${esc(title)}</b>
+        <span class=badge>${esc(ATTACH_KIND_L[a.kind]||a.kind)}</span>
+        <span class=fd>${attachSizeLabel(a.size)}${a.uploadedBy?' · '+esc(a.uploadedBy):''}${when?' · '+when:''}</span>
+        <div class=attach-actions>
+          <a class=sm href="${esc(a.url)}" target="_blank" rel="noopener">مشاهده</a>
+          ${can('write')?`<button type=button class="sm x" onclick="delAttachment('${esc(a.id)}')">حذف</button>`:''}
+        </div>
+      </div>
+    </article>`;
+  }).join('')}</div>`;
+}
+async function hydrateAttachments(){
+  const panel=$('#attachPanel');
+  if(!panel)return;
+  const custId=panel.dataset.cust||'';
+  const contractId=panel.dataset.contract||'';
+  const list=$('#attachList');
+  const files=$('#attachFiles');
+  const drop=$('#attachDrop');
+  const countEl=$('#attachCount');
+  if(!custId){if(list)list.innerHTML=empty('مشتری مشخص نیست.');return}
+  ATTACH_STATE={custId,contractId,items:[],loading:true,error:''};
+  try{
+    const q=new URLSearchParams({custId});
+    const data=await api('/api/attachments?'+q.toString());
+    let items=Array.isArray(data.items)?data.items:[];
+    if(contractId){
+      const linked=items.filter(a=>a.contractId===contractId);
+      const unlinked=items.filter(a=>!a.contractId);
+      items=V.n==='cd'?[...linked,...unlinked.filter(a=>['contract_signed','installment_signed','payment_receipt'].includes(a.kind))]:items;
+      if(V.n==='cd'&&!linked.length)items=items.slice(0,12);
+    }
+    ATTACH_STATE={custId,contractId,items,loading:false,error:''};
+    if(countEl)countEl.textContent=F(items.length);
+    if(files){
+      files.innerHTML=attachFilesListHtml(items);
+      if(drop){
+        drop.style.display=items.length?'none':'';
+        const title=drop.querySelector('b');
+        if(title&&!items.length)title.textContent='برای این قرارداد هنوز سندی نیست';
+      }
+    }else if(list){
+      list.innerHTML=attachCardsHtml(items,{empty:contractId?'برای این قرارداد هنوز سند خاصی نیست. از پرونده مشتری هم می‌توانید بارگذاری کنید.':'سندی بارگذاری نشده است.'});
+    }
+  }catch(e){
+    ATTACH_STATE.loading=false;
+    ATTACH_STATE.error=e.message||'خطا';
+    if(countEl)countEl.textContent='—';
+    if(files){
+      files.innerHTML='';
+      if(drop){drop.style.display='';const title=drop.querySelector('b');if(title)title.textContent='بارگذاری اسناد ممکن نشد';}
+    }else if(list){
+      list.innerHTML=`<div class=warn-line>بارگذاری اسناد ممکن نشد${e.message&&e.message!=='auth'?': '+esc(e.message):''}</div>`;
+    }
+  }
+}
+function openAttachUpload(custId,contractId){
+  if(!can('write'))return toast('اجازه بارگذاری ندارید');
+  const contracts=S.contracts.filter(c=>c.cust===custId);
+  form('بارگذاری سند مشتری',[
+    {k:'kind',l:'نوع سند',t:'select',o:ATTACH_KINDS.map(x=>[x.k,x.l]),r:1},
+    {k:'title',l:'عنوان (اختیاری)',p:'مثلاً قرارداد امضاشده صفحه ۱'},
+    {k:'contractId',l:'مرتبط با قرارداد',t:'select',o:[['','— بدون قرارداد —'],...contracts.map(c=>[c.id,`${c.no} · ${typeName(c.type)}`])]},
+    {t:'html',html:`<label class=w>فایل تصویر یا PDF (حداکثر ۵ مگابایت)
+      <input type=file id=attachFile accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,.pdf,.jpg,.jpeg,.png,.webp,.gif">
+    </label>`},
+  ],{kind:'contract_signed',contractId:contractId||'',_boxClass:'box-wide'},async v=>{
+    const file=$('#attachFile')?.files?.[0];
+    if(!file){toast('فایل را انتخاب کنید');return false}
+    if(file.size>5*1024*1024){toast('حجم فایل حداکثر ۵ مگابایت است');return false}
+    const fd=new FormData();
+    fd.append('file',file);
+    fd.append('custId',custId);
+    fd.append('kind',v.kind);
+    if(v.title)fd.append('title',v.title);
+    if(v.contractId)fd.append('contractId',v.contractId);
+    try{
+      const res=await fetch('/api/attachments',{method:'POST',credentials:'same-origin',body:fd});
+      if(res.status===401){showLogin();return false}
+      const body=await res.json().catch(()=>({}));
+      if(!res.ok){toast(body.message||'بارگذاری ناموفق بود');return false}
+      toast('سند ذخیره شد');
+      hydrateAttachments();
+      return true;
+    }catch(e){
+      toast('ارتباط با سرور برقرار نشد');
+      return false;
+    }
+  });
+}
+async function delAttachment(id){
+  if(!can('write'))return toast('اجازه حذف ندارید');
+  askConfirm({
+    title:'حذف سند',
+    body:'<p>این فایل از بایگانی مشتری حذف شود؟</p>',
+    okLabel:'حذف سند',
+    danger:true,
+  },async()=>{
+    try{
+      await api('/api/attachments/'+id,{method:'DELETE'});
+      toast('سند حذف شد');
+      hydrateAttachments();
+      return true;
+    }catch(e){
+      if(e.message!=='auth')toast(e.message||'حذف ناموفق بود');
+      return false;
+    }
+  });
+}
 function cuV(){const c=S.customers.find(x=>x.id==V.id);if(!c)return custV();const cs=S.contracts.filter(x=>x.cust==c.id),viaDang=contractsViaDang(c.id).filter(x=>x.contract.cust!==c.id),rv=S.reservations.filter(x=>x.cust==c.id),ls=S.leads.filter(x=>x.cust==c.id),k=c.kyc||{},shares=custDangShares(c.id),cis=custInstStats(cs),linkedCount=cs.length+viaDang.length;
  return `<div class=top><h2>${esc(c.name)}</h2><div><button onclick="go('cust')">بازگشت</button> <button onclick="addR({cust:'${c.id}'})">رزرو</button> <button onclick="addC({cust:'${c.id}'})">قرارداد</button> ${(can('acct')||can('admin'))?`<button class=btn-soft onclick="openAcctForCustomer('${c.id}')">حسابداری / پرداخت</button>`:''} <button class=pri onclick="addN('${c.id}')">ثبت تماس</button> ${canDeleteRec()?`<button class="btn-ghost danger" onclick="delCu('${c.id}')">حذف کامل پرونده</button>`:''}</div></div><p>کد ملی ${F(c.nid)} | پدر: ${esc(c.father||'—')} | ☎ <a class=ph href="tel:${N(c.phone)}">${F(c.phone)}</a> | ${esc(c.addr||'')}</p>
  <div class=stats><div class=st><b>${F(linkedCount)}</b><span>قرارداد مرتبط</span></div><div class=st><b>${money(sum(cs,paidSum))}</b><span>پرداخت‌شده</span></div><div class=st><b>${money(sum(cs,x=>x.total-paidSum(x)))}</b><span>مانده قراردادها</span></div><div class=st><b>${F(cis.paid)}${cis.total?` / ${F(cis.total)}`:''}</b><span>اقساط پرداخت‌شده</span></div><div class=st><b>${F(cis.unpaid+cis.partial)}</b><span>اقساط باقی‌مانده</span></div><div class=st><b>${F(rv.length)}</b><span>رزرو</span></div><div class=st><b>${F(shares.length)}</b><span>سهم دانگی</span></div></div>
+ ${attachPanelShell(c.id,'')}
  <h3>مدارک و احراز هویت (${F(KY.filter(x=>k[x]).length)} از ${F(KY.length)})</h3><div class=wrap style="padding:8px 12px">${KY.map(x=>`<label style="display:flex;gap:8px;align-items:center"><input type=checkbox style="width:auto" ${k[x]?'checked':''} onchange="setK('${c.id}','${x}',this.checked)"> ${x}</label>`).join('')}</div>
  ${ls.length?`<h3>سرنخ</h3>`+tbl(['منبع','مرحله','مسئول','هماهنگ‌کننده بازدید','پیگیری بعدی',''],ls.map(l=>`<tr><td>${esc(l.src||'')}</td><td>${LS[l.stage]}</td><td>${esc(l.rep||'—')}</td><td>${esc(l.vcName||'—')}${l.vcPhone?' – '+F(l.vcPhone):''}</td><td>${l.next?F(l.next):'—'}</td><td><button class=sm onclick="go('lv','${l.id}')">پرونده سرنخ</button></td></tr>`).join('')):''}
   <h3>مالکیت دانگی</h3>${shares.length?tbl(['پروژه','واحد','سهم','توضیح','قرارداد واحد',''],shares.map(s=>{const linked=contractByUnit(s.proj.id,s.unit.id);return `<tr><td>${esc(s.proj.name)}</td><td>واحد ${esc(s.unit.no)}${s.unit.block?' · '+esc(s.unit.block):''}</td><td><b>${F(s.owner.dang)} دانگ</b> از ${F(DANG_MAX)}</td><td>${esc(s.owner.note||'—')}</td><td>${linked?`<b>${esc(linked.no)}</b>${linked.cust===c.id?'':' <span class="badge warn">شریک دانگی</span>'}`:'—'}</td><td>${linked?`<button class=sm onclick="go('cd','${linked.id}')">قرارداد</button> `:''}<button class=sm onclick="go('pd','${s.proj.id}')">واحدها</button></td></tr>`}).join('')):empty('سهم دانگی ثبت‌شده‌ای ندارد.')}

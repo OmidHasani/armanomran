@@ -25,6 +25,7 @@
     "helmet": "^8.1.0",
     "mongodb": "^6.21.0",
     "mongoose": "^8.19.1",
+    "multer": "^2.5.0",
     "sanitize-html": "^2.17.0",
     "zod": "^3.25.76"
   }

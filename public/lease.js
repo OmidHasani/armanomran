@@ -204,12 +204,47 @@ ${art9}
     return legalPages([p1, p2, p3, p4], leaseFoot());
   }
 
+  function qarzSuggestionFromContract(c) {
+    const downs = typeof contractDownInsts === 'function'
+      ? contractDownInsts(c)
+      : (c.inst || []).filter((i) => /پیش\s*پرداخت|بیعانه|قرض\s*الحسنه/.test(String(i.title || '')));
+    if (!downs.length) return null;
+    const pays = downs.map((i) => {
+      const rowPays = typeof instPays === 'function' ? instPays(i) : (Array.isArray(i.pays) ? i.pays : []);
+      const firstPay = rowPays[0] || null;
+      return {
+        id: uid(),
+        amt: Number(i.amt) || 0,
+        date: i.pdate || firstPay?.date || i.date || '',
+        bank: '',
+        ref: firstPay?.ref || i.ref || '',
+      };
+    }).filter((r) => r.amt || r.date || r.ref);
+    if (!pays.length) return null;
+    return { qarzPays: pays, qarzTotal: sum(pays, (r) => Number(r.amt) || 0) };
+  }
+
+  function qarzRowsEmpty(rows, total) {
+    const list = Array.isArray(rows) ? rows : [];
+    const hasRow = list.some((r) => Number(r.amt) || r.date || r.bank || r.ref);
+    return !hasRow && !(Number(total) > 0);
+  }
+
   function leaseDocDefaults(c, cu, p, u) {
     const d = c.doc || {};
     let end = d.end || '';
     if (!end && c.date && c.dur) {
       const months = parseInt(N(c.dur), 10);
       if (months > 0) end = addM(c.date, months);
+    }
+    let qarzPays = Array.isArray(d.qarzPays) && d.qarzPays.length ? d.qarzPays.map((r) => ({ ...r })) : [{ id: uid(), amt: 0, date: '', bank: '', ref: '' }];
+    let qarzTotal = d.qarzTotal || 0;
+    if (qarzRowsEmpty(qarzPays, qarzTotal)) {
+      const sug = qarzSuggestionFromContract(c);
+      if (sug) {
+        qarzPays = sug.qarzPays;
+        qarzTotal = sug.qarzTotal;
+      }
     }
     return {
       title: d.title || 'خانم',
@@ -223,8 +258,9 @@ ${art9}
       start: d.start || c.date || '',
       end,
       handDate: d.handDate || c.hand || c.date || '',
-      qarzTotal: d.qarzTotal || 0,
-      qarzPays: Array.isArray(d.qarzPays) && d.qarzPays.length ? d.qarzPays : [{ id: uid(), amt: 0, date: '', bank: '', ref: '' }],
+      qarzTotal,
+      qarzPays,
+      qarzTotalManual: !!(Number(d.qarzTotal) > 0 && Array.isArray(d.qarzPays) && d.qarzPays.length && Math.abs(Number(d.qarzTotal) - sum(d.qarzPays, (x) => Number(x.amt) || 0)) > 0.5),
       payDayLabel: parsePayDay(d.payDayLabel) || '',
       coolDays: d.coolDays != null && d.coolDays !== '' ? parseDays(d.coolDays, LEASE_PAY_DEFAULTS.coolDays) : (c.doc ? parseDays(d.coolDays, 0) : LEASE_PAY_DEFAULTS.coolDays),
       qarzRefundCount: d.qarzRefundCount != null && d.qarzRefundCount !== '' ? parseDays(d.qarzRefundCount, LEASE_PAY_DEFAULTS.qarzRefundCount) : (c.doc ? parseDays(d.qarzRefundCount, 0) : LEASE_PAY_DEFAULTS.qarzRefundCount),
@@ -245,6 +281,16 @@ ${art9}
     const u = unitOf(c.proj, c.unit);
     const init = leaseDocDefaults(c, cu, p, u);
     const m = $('#modal');
+    const refreshQarzTotalField = () => {
+      const el = m.querySelector('[name=qarzTotal]');
+      if (!el) return;
+      if (!init.qarzTotalManual) {
+        const total = sum(init.qarzPays, (r) => Number(r.amt) || 0);
+        init.qarzTotal = total;
+        el.value = total ? money(total) : '';
+        paintMoneyWords(el);
+      }
+    };
     const qarzRows = () => {
       const box = m.querySelector('#qarzBox');
       if (!box) return;
@@ -256,7 +302,11 @@ ${art9}
       <button type="button" class="sm x" data-del="${i}">حذف</button>
     </div>`).join('');
       box.querySelectorAll('[data-k=amt]').forEach((el) => {
-        el.oninput = () => { fmtMoney(el); };
+        el.oninput = () => {
+          fmtMoney(el);
+          syncQarzFromDom();
+          refreshQarzTotalField();
+        };
         paintMoneyWords(el);
       });
       box.querySelectorAll('[data-k=date]').forEach((el) => bindDate(el));
@@ -266,6 +316,7 @@ ${art9}
           init.qarzPays.splice(+btn.dataset.del, 1);
           if (!init.qarzPays.length) init.qarzPays.push({ id: uid(), amt: 0, date: '', bank: '', ref: '' });
           qarzRows();
+          refreshQarzTotalField();
         };
       });
     };
@@ -282,6 +333,40 @@ ${art9}
           ref: g('ref'),
         };
       });
+    };
+    const applyQarzSuggestion = (force) => {
+      const sug = qarzSuggestionFromContract(c);
+      if (!sug) return toast('در جدول اقساط قرارداد، ردیف پیش‌پرداخت پیدا نشد');
+      if (!force && !qarzRowsEmpty(init.qarzPays, init.qarzTotal)) {
+        askConfirm({
+          title: 'همگام‌سازی قرض‌الحسنه',
+          body: '<p>مقادیر فعلی قرض‌الحسنه با پیش‌پرداخت قرارداد جایگزین شود؟</p><p class=fd>در صورت نیاز بعداً می‌توانید ردیف‌ها را دستی اصلاح کنید.</p>',
+          okLabel: 'بله، همگام شود',
+        }, () => {
+          init.qarzPays = sug.qarzPays;
+          init.qarzTotal = sug.qarzTotal;
+          init.qarzTotalManual = false;
+          const manual = m.querySelector('[name=qarzTotalManual]');
+          if (manual) manual.checked = false;
+          const tot = m.querySelector('[name=qarzTotal]');
+          if (tot) tot.readOnly = true;
+          qarzRows();
+          refreshQarzTotalField();
+          toast('قرض‌الحسنه از پیش‌پرداخت پر شد');
+          return true;
+        });
+        return;
+      }
+      init.qarzPays = sug.qarzPays;
+      init.qarzTotal = sug.qarzTotal;
+      init.qarzTotalManual = false;
+      const manual = m.querySelector('[name=qarzTotalManual]');
+      if (manual) manual.checked = false;
+      const tot = m.querySelector('[name=qarzTotal]');
+      if (tot) tot.readOnly = true;
+      qarzRows();
+      refreshQarzTotalField();
+      toast('قرض‌الحسنه از پیش‌پرداخت پر شد');
     };
     m.innerHTML = `<div class="box lease-box">
     <div class="lease-form-head">
@@ -321,13 +406,18 @@ ${art9}
         <label>تاریخ تسلیم مورد اجاره<input name=handDate readonly style="cursor:pointer" placeholder="انتخاب از تقویم"></label>
         <label>روز ثابت پرداخت هر ماه (۱ تا ۳۱)<input name=payDayLabel inputmode=numeric placeholder="مثلاً ۱۰"></label>
         <label>مهلت فسخ بدون خسارت (روز)<input name=coolDays inputmode=numeric placeholder="مثلاً ۳۰"></label>
-        <label>تعداد اقساط عودت قرض‌الحسنه<input name=qarzRefundCount inputmode=numeric placeholder="مثلاً ۸"></label>
+        <label>تعداد اقساط عودت قرض‌الحسنه<input name=qarzRefundCount inputmode=numeric placeholder="مثلاً ۸"><small class=fd>فقط برای تبصره فسخ: اگر قرارداد به‌خاطر تخلف فسخ شود، قرض‌الحسنه پس از کسر ۱۵٪ طی چند قسط ماهانه عودت می‌شود. روی جدول اقساط فروش اثر ندارد.</small></label>
       </div>
     </div>
     <div class=lease-sec>
       <h4>۴. قرض‌الحسنه</h4>
+      <p class=fd style="margin:0 0 10px">برای جلوگیری از ثبت تکراری، این بخش از پیش‌پرداخت قرارداد پر می‌شود. در صورت نیاز می‌توانید ردیف‌ها یا جمع را دستی اصلاح کنید.</p>
+      <div class=act style="justify-content:flex-start;margin:0 0 10px;padding:0;border:0">
+        <button type=button class="sm btn-soft" id=syncQarzDown>همگام‌سازی از پیش‌پرداخت قرارداد</button>
+      </div>
       <div class=grid>
-        <label>جمع قرض‌الحسنه (تومان) – خالی = جمع ردیف‌ها<input name=qarzTotal data-money inputmode=numeric></label>
+        <label>جمع قرض‌الحسنه (تومان)<input name=qarzTotal data-money inputmode=numeric ${init.qarzTotalManual ? '' : 'readonly'}><small class=fd>پیش‌فرض برابر جمع ردیف‌های واریز است.</small></label>
+        <label class=chk-lab style="align-self:end"><span class=chkline><input type=checkbox name=qarzTotalManual ${init.qarzTotalManual ? 'checked' : ''}> ویرایش دستی جمع</span></label>
       </div>
       <div id=qarzBox class=qarz-box></div>
       <button type=button class="sm btn-soft" id=addQarz><span class=plus>+</span> ردیف واریز</button>
@@ -374,13 +464,30 @@ ${art9}
     });
     hintFor(m.querySelector('[name=qarzRefundCount]'), (v) => {
       const n = parseDays(v, 0);
-      return n ? `در تبصره ماده ۵: طی ${F(n)} قسط` : '';
+      return n ? `در تبصره ماده ۵: طی ${F(n)} قسط ماهانه عودت` : 'فقط برای تبصره فسخ؛ روی اقساط فروش اثر ندارد';
     });
     qarzRows();
+    refreshQarzTotalField();
+    const manualEl = m.querySelector('[name=qarzTotalManual]');
+    const totalEl = m.querySelector('[name=qarzTotal]');
+    if (manualEl && totalEl) {
+      manualEl.onchange = () => {
+        init.qarzTotalManual = !!manualEl.checked;
+        totalEl.readOnly = !init.qarzTotalManual;
+        if (!init.qarzTotalManual) refreshQarzTotalField();
+      };
+      totalEl.oninput = function () {
+        if (!init.qarzTotalManual) return;
+        fmtMoney(this);
+        init.qarzTotal = num(this.value);
+      };
+    }
+    m.querySelector('#syncQarzDown').onclick = () => applyQarzSuggestion(false);
     m.querySelector('#addQarz').onclick = () => {
       syncQarzFromDom();
       init.qarzPays.push({ id: uid(), amt: 0, date: '', bank: '', ref: '' });
       qarzRows();
+      refreshQarzTotalField();
     };
     m.querySelector('#ok').onclick = () => {
       syncQarzFromDom();
@@ -403,7 +510,8 @@ ${art9}
         bank: r.bank || '',
         ref: r.ref || '',
       }));
-      const qarzTotal = num(g('qarzTotal')) || sum(qarzPays, (r) => r.amt);
+      const manual = !!m.querySelector('[name=qarzTotalManual]')?.checked;
+      const qarzTotal = manual ? (num(g('qarzTotal')) || sum(qarzPays, (r) => r.amt)) : sum(qarzPays, (r) => r.amt);
       c.doc = {
         ...(c.doc || {}),
         title: g('title') || 'آقای/خانم',
