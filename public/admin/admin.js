@@ -27,6 +27,7 @@ const NAV = [
   { id: 'overview', label: 'نمای کلی', eyebrow: 'خلاصه وضعیت' },
   { id: 'users', label: 'کاربران', eyebrow: 'حساب‌ها و دسترسی‌ها' },
   { id: 'units', label: 'واحدهای سازمانی', eyebrow: 'ساختار ارجاع' },
+  { id:'activity',label:'حضور و سوابق فعالیت',eyebrow:'نظارت مدیریت'},
   { id: 'settings', label: 'تنظیمات', eyebrow: 'قوانین خودکار' },
 ];
 
@@ -52,45 +53,7 @@ function money(n) {
   return fa(Math.round(Number(n) || 0));
 }
 function parseMoney(s) {
-  return Number(String(s || '').replace(/[^\d.-]/g, '')) || 0;
-}
-const U1 = ['', 'یک', 'دو', 'سه', 'چهار', 'پنج', 'شش', 'هفت', 'هشت', 'نه', 'ده', 'یازده', 'دوازده', 'سیزده', 'چهارده', 'پانزده', 'شانزده', 'هفده', 'هجده', 'نوزده'];
-const T1 = ['', '', 'بیست', 'سی', 'چهل', 'پنجاه', 'شصت', 'هفتاد', 'هشتاد', 'نود'];
-const H1 = ['', 'صد', 'دویست', 'سیصد', 'چهارصد', 'پانصد', 'ششصد', 'هفتصد', 'هشتصد', 'نهصد'];
-const B1 = ['', 'هزار', 'میلیون', 'میلیارد', 'تریلیون'];
-function w3(n) {
-  const p = [];
-  if (n >= 100) p.push(H1[Math.floor(n / 100)]);
-  n %= 100;
-  if (n >= 20) { p.push(T1[Math.floor(n / 10)]); if (n % 10) p.push(U1[n % 10]); }
-  else if (n) p.push(U1[n]);
-  return p.join(' و ');
-}
-function words(n) {
-  n = Math.round(Number(n) || 0);
-  if (!n) return 'صفر';
-  const g = [];
-  let i = 0;
-  while (n) {
-    const r = n % 1000;
-    if (r) g.unshift(w3(r) + (B1[i] ? ' ' + B1[i] : ''));
-    n = Math.floor(n / 1000);
-    i += 1;
-  }
-  return g.join(' و ');
-}
-function paintMoneyWords(el) {
-  if (!el || !el.parentElement) return;
-  let h = el.parentElement.querySelector(':scope > .money-words, :scope > .hint.money-words');
-  if (!h) {
-    h = document.createElement('small');
-    h.className = 'hint money-words';
-    el.insertAdjacentElement('afterend', h);
-  }
-  const n = parseMoney(el.value);
-  const t = n ? `${words(n)} تومان` : '';
-  h.textContent = t;
-  h.hidden = !t;
+  return Number(String(s || '').replace(/[۰-۹]/g,c=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(c)).replace(/[٠-٩]/g,c=>'٠١٢٣٤٥٦٧٨٩'.indexOf(c)).replace(/[^\d.-]/g, '')) || 0;
 }
 function unitName(id) {
   return state.units.find((u) => u.id === id)?.name || '—';
@@ -186,7 +149,7 @@ function showShell() {
   if (shell) shell.hidden = false;
   const who = $('#who');
   if (who && state.me) {
-    who.innerHTML = `<b>${esc(state.me.name)}</b><small>${esc(state.me.username)} · ${esc(ROLE_LABEL[state.me.role] || state.me.role)}</small>`;
+    who.innerHTML = `<b>${esc(state.me.name)}</b><small>${esc(state.me.username)} — ${esc(ROLE_LABEL[state.me.role] || state.me.role)}</small>`;
   }
   renderNav();
   render();
@@ -217,6 +180,7 @@ function render() {
   const actions = $('#headActions');
   const content = $('#content');
 
+  if(state.tab==='activity'){renderActivity();return}
   if (state.tab === 'overview') {
     actions.innerHTML = `<button class="btn" type="button" id="btnRefresh">بروزرسانی</button>`;
     $('#btnRefresh').onclick = async () => {
@@ -250,8 +214,7 @@ function render() {
     content.innerHTML = settingsHtml();
     $('#saveSettings').onclick = saveSettings;
     $('#syncLegal').onclick = syncLegal;
-    $('#fineAmt').oninput = (e) => { e.target.value = money(parseMoney(e.target.value)); paintMoneyWords(e.target); };
-    paintMoneyWords($('#fineAmt'));
+    $('#fineAmt').oninput = (e) => { e.target.value = money(parseMoney(e.target.value)); };
     return;
   }
 }
@@ -360,7 +323,7 @@ function unitsHtml() {
           <h4>${esc(u.name)}</h4>
           <span class="badge ${u.active === false ? 'bad' : 'ok'}">${u.active === false ? 'غیرفعال' : 'فعال'}</span>
         </div>
-        <div class="meta"><code>${esc(u.code)}</code> · ${fa((u.memberIds || []).length)} عضو</div>
+        <div class="meta"><code>${esc(u.code)}</code> — ${fa((u.memberIds || []).length)} عضو</div>
         <div class="meta">${esc(u.note || 'بدون توضیح')}</div>
         <div class="actions">
           <button class="btn sm" data-uedit="${u.id}">ویرایش</button>
@@ -381,8 +344,8 @@ function settingsHtml() {
   <section class="panel">
     <div class="panel-h"><div><h3>تنظیمات ارجاع حقوقی</h3><p>آستانه‌ها و جریمه‌های خودکار سامانه</p></div></div>
     <div class="settings-grid">
-      <div class="field"><label>حد آستانه ارجاع خودکار (روز)</label><input id="legalDays" inputmode="numeric" value="${esc(s.legalDays ?? 7)}"></div>
-      <div class="field"><label>مهلت پیش‌فرض رزرو (روز)</label><input id="resDays" inputmode="numeric" value="${esc(s.days ?? 20)}"></div>
+      <div class="field"><label>حد آستانه ارجاع خودکار (روز)</label><input id="legalDays" inputmode="numeric" value="${fa(s.legalDays ?? 7)}"></div>
+      <div class="field"><label>مهلت پیش‌فرض رزرو (روز)</label><input id="resDays" inputmode="numeric" value="${fa(s.days ?? 20)}"></div>
       <div class="field span2"><label>مبلغ کسر پیش‌فرض لغو رزرو (تومان)</label><input id="fineAmt" inputmode="numeric" value="${money(s.fine ?? 30000000)}"></div>
       <div class="field span2"><label class="checkline"><input id="autoLegal" type="checkbox" ${s.autoLegal !== false ? 'checked' : ''}> ارجاع خودکار به واحد حقوقی فعال باشد</label></div>
     </div>
@@ -426,7 +389,7 @@ function userForm(init) {
       <div class="field"><label>نام کاربری ورود ${editing ? '' : '<span class="req">*</span>'}</label>
         <input name="username" ${editing ? 'readonly' : ''} autocomplete="off" spellcheck="false"
           placeholder="latin_username" value="${esc(init.username || '')}">
-        <small class="hint">فقط انگلیسی، عدد، نقطه، خط تیره و زیرخط · ۳ تا ۳۲ نویسه</small>
+        <small class="hint">فقط انگلیسی، عدد، نقطه، خط تیره و زیرخط — ۳ تا ۳۲ نویسه</small>
       </div>
       <div class="field"><label>رمز عبور ورود ${editing ? '' : '<span class="req">*</span>'}</label>
         <input name="password" type="password" autocomplete="new-password"
@@ -435,8 +398,8 @@ function userForm(init) {
       ${editing ? '' : `<div class="field span2"><label>تکرار رمز عبور <span class="req">*</span></label>
         <input name="password2" type="password" autocomplete="new-password" placeholder="همان رمز را دوباره وارد کنید">
       </div>`}
-      <div class="field span2"><label>عضویت در واحدهای سازمانی</label>${unitChecks(init.unitIds)}</div>
-      <div class="field span2"><label>دسترسی‌های بخشی سامانه</label>${permChecks(init.perms, init.role || 'staff')}</div>
+      <div class="field"><label>سمت سازمانی</label><input name="jobTitle" value="${esc(init.jobTitle||'')}"></div><div class="field"><label>شماره تماس</label><input name="phone" inputmode="tel" value="${esc(init.phone||'')}"></div><div class="field span2"><label>عضویت در واحدهای سازمانی</label>${unitChecks(init.unitIds)}</div>
+      <div class="field span2"><label>دسترسی‌های فردی (علاوه بر دسترسی واحدهای عضو)</label>${permChecks(init.perms, init.role || 'staff')}</div>
       ${editing ? `<div class="field span2"><label class="checkline"><input name="active" type="checkbox" ${init.active !== false ? 'checked' : ''}> حساب فعال باشد (غیرفعال = عدم ورود)</label></div>` : ''}
     </div>
     <div class="drawer-actions">
@@ -447,14 +410,13 @@ function userForm(init) {
   const box = $('#modal .drawer');
   box.querySelector('[name=role]').onchange = (e) => {
     const role = e.target.value;
-    const cur = $$('#permBox [data-p]:checked').map((el) => el.dataset.p);
-    const applyDefaults = !editing || role === 'admin' || confirm('دسترسی‌های پیش‌فرض این نقش اعمال شود؟\nانصراف = نگه داشتن تیک‌های فعلی');
-    box.querySelector('#permBox').outerHTML = permChecks(applyDefaults ? (ROLE_DEFAULTS[role] || []) : cur, role);
+    box.querySelector('#permBox').outerHTML = permChecks(ROLE_DEFAULTS[role] || [], role);
   };
   $('#cancel').onclick = closeModal;
   $('#ok').onclick = async () => {
     const payload = {
       name: box.querySelector('[name=name]').value.trim(),
+      jobTitle:box.querySelector('[name=jobTitle]').value,phone:box.querySelector('[name=phone]').value,
       username: box.querySelector('[name=username]').value.trim().toLowerCase(),
       password: box.querySelector('[name=password]').value,
       role: box.querySelector('[name=role]').value,
@@ -520,7 +482,7 @@ function unitForm(init) {
       <div class="field"><label>نام واحد</label><input name="name" placeholder="مثلاً امور قراردادها" value="${esc(init.name || '')}"></div>
       <div class="field"><label>کد انگلیسی</label><input name="code" ${init.code === 'legal' ? 'readonly' : ''} placeholder="contracts" value="${esc(init.code || '')}"></div>
       <div class="field span2"><label>توضیح</label><textarea name="note" rows="2">${esc(init.note || '')}</textarea></div>
-      <div class="field span2"><label>اعضای واحد</label>${memberChecks}</div>
+      <div class="field span2"><label>دسترسی مشترک همه اعضای این واحد</label><div class="checks">${PERM_DEFS.filter(p=>p.k!=='admin').map(p=>'<label><input type="checkbox" data-grant="'+p.k+'" '+(init.perms?.includes(p.k)?'checked':'')+'>'+esc(p.l)+'</label>').join('')}</div></div><div class="field span2"><label>اعضای واحد</label>${memberChecks}</div>
       ${editing && init.code !== 'legal' ? `<div class="field span2"><label class="checkline"><input name="active" type="checkbox" ${init.active !== false ? 'checked' : ''}> واحد فعال باشد</label></div>` : ''}
     </div>
     <div class="drawer-actions">
@@ -535,6 +497,7 @@ function unitForm(init) {
       name: box.querySelector('[name=name]').value.trim(),
       code: box.querySelector('[name=code]').value.trim().toLowerCase(),
       note: box.querySelector('[name=note]').value.trim(),
+      perms:$$('[data-grant]:checked').map(e=>e.dataset.grant),
       memberIds: $$('#memberBox [data-m]:checked').map((e) => e.dataset.m),
     };
     if (editing && init.code !== 'legal') payload.active = !!box.querySelector('[name=active]')?.checked;
@@ -573,8 +536,8 @@ async function delUnit(id) {
 async function saveSettings() {
   try {
     const body = {
-      legalDays: Number($('#legalDays').value) || 7,
-      days: Number($('#resDays').value) || 20,
+      legalDays: parseMoney($('#legalDays').value) || 7,
+      days: parseMoney($('#resDays').value) || 20,
       fine: parseMoney($('#fineAmt').value),
       autoLegal: $('#autoLegal').checked,
     };

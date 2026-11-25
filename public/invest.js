@@ -10,11 +10,11 @@
     addr: 'اصفهان- خیابان چهارباغ بالا-مجموعه متروپل-کوچه باغ ارم-مجتمع ارم-طبقه چهارم-واحد ۴۱',
   };
   const PAY_DEFAULTS = {
-    payBank: 'مسکن',
-    payCard: '6280231545915190',
-    paySheba: '930140040000013010694761',
-    payAcct: '13010694761',
-    payName: 'فریده بهزادی',
+    payBank: '',
+    payCard: '',
+    paySheba: '',
+    payAcct: '',
+    payName: '',
     coolDays: 30,
     delayFineDaily: 150000,
     delayExtraDays: 15,
@@ -103,6 +103,10 @@
 <p class=art><b>۴-۶)</b> الباقی مبلغ قرارداد معادل ((---------- میلیون تومان)) را به صورت نقد یا تسهیلات تا پایان وقت اداری مورخ --/--/---- تسلیم شرکت سازنده نماید.</p>`;
     }
     const parts = [];
+    if (typeof payParts === 'function') {
+      const pp = payParts(c);
+      parts.push(`<p class=art><b>مقدمه)</b> مبلغ کل قرارداد معادل ((${esc(WW(pp.total))})) است که از این مبلغ ((${esc(WW(pp.down))})) پیش‌پرداخت، ((${esc(WW(pp.inst))})) اقساط، و ((${esc(WW(pp.cash))})) تسویه نقدی/الباقی توافق شده است.</p>`);
+    }
     let n = 0;
     paid.forEach((i) => {
       n += 1;
@@ -138,7 +142,7 @@
     const art6 = investArt6Html(c, x);
     const totalWords = c.total ? WW(c.total) : '--- میلیارد و ----------- میلیون تومان';
     const delayFine = words(Math.round(x.delayFineDaily)) || 'یکصد و پنجاه هزار';
-    const head = legalHead(c.no, c.date, '« بسم الله الرحمن الرحیم »', 'قرارداد سرمایه‌گذاری در ساخت');
+    const head = legalHead(c.no, c.date, '« بسم الله الرحمن الرحیم »', 'قرارداد سرمایه‌گذاری در ساخت') + ownershipPrint(c);
 
     const p1 = `${head}
 <p class=art-title>ماده ۱- طرفین قرارداد (متعاملین)</p>
@@ -198,7 +202,7 @@ ${art6}
   function investDocDefaults(c, cu, p, u) {
     const d = c.doc || {};
     return {
-      title: d.title || 'خانم',
+      title: d.title || '',
       birth: d.birth || '',
       addr: d.addr || cu.addr || '',
       phone: d.phone || cu.phone || '',
@@ -208,15 +212,15 @@ ${art6}
       floor: d.floor || u.floor || '',
       block: d.block || '',
       payDayLabel: parsePayDay(d.payDayLabel) || '',
-      coolDays: d.coolDays != null && d.coolDays !== '' ? parseDays(d.coolDays, PAY_DEFAULTS.coolDays) : (c.doc ? parseDays(d.coolDays, 0) : PAY_DEFAULTS.coolDays),
+      coolDays: parseDays(d.coolDays, PAY_DEFAULTS.coolDays),
       chequeNo: d.chequeNo || defaultChequeNo(c),
-      delayFineDaily: d.delayFineDaily != null && d.delayFineDaily !== '' ? d.delayFineDaily : (c.doc ? (d.delayFineDaily ?? 0) : PAY_DEFAULTS.delayFineDaily),
-      delayExtraDays: d.delayExtraDays != null && d.delayExtraDays !== '' ? parseDays(d.delayExtraDays, PAY_DEFAULTS.delayExtraDays) : (c.doc ? parseDays(d.delayExtraDays, 0) : PAY_DEFAULTS.delayExtraDays),
-      payBank: d.payBank ?? (c.doc ? '' : PAY_DEFAULTS.payBank),
-      payCard: d.payCard ?? (c.doc ? '' : PAY_DEFAULTS.payCard),
-      paySheba: d.paySheba ?? (c.doc ? '' : PAY_DEFAULTS.paySheba),
-      payAcct: d.payAcct ?? (c.doc ? '' : PAY_DEFAULTS.payAcct),
-      payName: d.payName ?? (c.doc ? '' : PAY_DEFAULTS.payName),
+      delayFineDaily: d.delayFineDaily || PAY_DEFAULTS.delayFineDaily,
+      delayExtraDays: parseDays(d.delayExtraDays, PAY_DEFAULTS.delayExtraDays),
+      payBank: d.payBank || PAY_DEFAULTS.payBank,
+      payCard: d.payCard || PAY_DEFAULTS.payCard,
+      paySheba: d.paySheba || PAY_DEFAULTS.paySheba,
+      payAcct: d.payAcct || PAY_DEFAULTS.payAcct,
+      payName: d.payName || PAY_DEFAULTS.payName,
     };
   }
 
@@ -236,10 +240,15 @@ ${art6}
     </div>
     ${crmSnapHtml(c, cu, p, u)}
     <div class=lease-sec>
+      <h4>۰. قیمت تمام‌شده و نحوه پرداخت</h4>
+      ${typeof payPlanHtml === 'function' ? payPlanHtml(c) : ''}
+      <p class=fd>پیش‌پرداخت، نقدی و اقساط از پرونده قرارداد خوانده می‌شود. برای تغییر مبالغ روی «ویرایش قیمت و نحوه پرداخت» در کادر بالا بزنید.</p>
+    </div>
+    <div class=lease-sec>
       <h4>۱. سرمایه‌گذار</h4>
       <div class=grid>
         <label>عنوان
-          <select name=title>
+          <select name=title><option value="">انتخاب عنوان</option>
             <option value="آقای">آقای</option>
             <option value="خانم">خانم</option>
             <option value="خانم / آقای">خانم / آقای</option>
@@ -266,7 +275,7 @@ ${art6}
       <div class=grid>
         <label>مهلت فسخ بدون خسارت (روز)<input name=coolDays inputmode=numeric placeholder="مثلاً ۳۰"></label>
         <label>روز اضافه به تحویل به‌ازای هر روز تأخیر<input name=delayExtraDays inputmode=numeric placeholder="مثلاً ۱۵"></label>
-        <label>خسارت روزانه تأخیر تحویل (تومان)<input name=delayFineDaily data-money inputmode=numeric></label>
+        <label>خسارت روزانه تأخیر تحویل (تومان)<input name=delayFineDaily inputmode=numeric></label>
         <label>شماره قرارداد در بند ۱۹-۹<input name=chequeNo></label>
       </div>
     </div>
@@ -296,11 +305,13 @@ ${art6}
     set('chequeNo', init.chequeNo);
     set('payBank', init.payBank); set('payCard', init.payCard); set('paySheba', init.paySheba); set('payAcct', init.payAcct); set('payName', init.payName);
     m.querySelector('[name=delayFineDaily]').value = init.delayFineDaily ? money(init.delayFineDaily) : '';
-    m.querySelector('[name=delayFineDaily]').oninput = function () { fmtMoney(this); };
-    paintMoneyWords(m.querySelector('[name=delayFineDaily]'));
+    m.querySelector('[name=delayFineDaily]').oninput = function () { fmtIn(this); };
     const birthEl = m.querySelector('[name=birth]');
     birthEl.value = init.birth ? F(init.birth) : '';
     bindDate(birthEl);
+    m.querySelectorAll('input[inputmode=numeric],input[inputmode=decimal],input[inputmode=tel]').forEach((el) => {
+      if (typeof bindFaDigits === 'function') bindFaDigits(el);
+    });
     hintFor(m.querySelector('[name=coolDays]'), (v) => {
       const n = parseDays(v, 0);
       return n ? `در متن قرارداد: ${daysPhrase(n)}` : 'عدد روز را وارد کنید';

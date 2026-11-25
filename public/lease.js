@@ -9,11 +9,11 @@
     addr: 'اصفهان خیابان چهارباغ بالا – کوچه باغ ارم – ساختمان ارم – طبقه چهارم – واحد ۴۱',
   };
   const LEASE_PAY_DEFAULTS = {
-    payBank: 'مسکن',
-    payCard: '6280231545915190',
-    paySheba: '930140040000013010694761',
-    payAcct: '13010694761',
-    payName: 'فریده بهزادی',
+    payBank: '',
+    payCard: '',
+    paySheba: '',
+    payAcct: '',
+    payName: '',
     coolDays: 30,
     qarzRefundCount: 8,
   };
@@ -34,7 +34,8 @@
   function groupInstForLease(inst) {
     const sorted = [...(inst || [])].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     const lumps = sorted.filter(isLumpInst);
-    const regs = sorted.filter((i) => !isLumpInst(i));
+    const regs = sorted.filter((i) => !isLumpInst(i) && i.kind !== 'deposit' && !/پیش.پرداخت|قرض.الحسنه/.test(i.title || ''));
+    const deposits = sorted.filter((i) => i.kind === 'deposit' || /پیش.پرداخت|قرض.الحسنه/.test(i.title || ''));
     const groups = [];
     for (const i of regs) {
       const last = groups[groups.length - 1];
@@ -46,7 +47,7 @@
         groups.push({ amt: i.amt, count: 1, total: i.amt, first: i.date, items: [i] });
       }
     }
-    return { groups, lumps };
+    return { groups, lumps, deposits };
   }
 
   function leaseDocData(c, cu, p, u) {
@@ -74,11 +75,11 @@
     const qarzRefundCount = parseDays(d.qarzRefundCount, LEASE_PAY_DEFAULTS.qarzRefundCount) || LEASE_PAY_DEFAULTS.qarzRefundCount;
     const payDayNum = parsePayDay(d.payDayLabel);
     const pay = {
-      bank: fillOr(d.payBank || LEASE_PAY_DEFAULTS.payBank, 'مسکن'),
-      card: fillOr(d.payCard || LEASE_PAY_DEFAULTS.payCard, LEASE_PAY_DEFAULTS.payCard),
-      sheba: fillOr(d.paySheba || LEASE_PAY_DEFAULTS.paySheba, LEASE_PAY_DEFAULTS.paySheba),
-      acct: fillOr(d.payAcct || LEASE_PAY_DEFAULTS.payAcct, LEASE_PAY_DEFAULTS.payAcct),
-      name: fillOr(d.payName || LEASE_PAY_DEFAULTS.payName, LEASE_PAY_DEFAULTS.payName),
+      bank: fillOr(d.payBank || (c.accountId?'':LEASE_PAY_DEFAULTS.payBank)),
+      card: fillOr(d.payCard || (c.accountId?'':LEASE_PAY_DEFAULTS.payCard)),
+      sheba: fillOr(d.paySheba || (c.accountId?'':LEASE_PAY_DEFAULTS.paySheba)),
+      acct: fillOr(d.payAcct || (c.accountId?'':LEASE_PAY_DEFAULTS.payAcct)),
+      name: fillOr(d.payName || (c.accountId?'':LEASE_PAY_DEFAULTS.payName)),
     };
     const qarzPays = Array.isArray(d.qarzPays) ? d.qarzPays : [];
     const qarzTotal = Number(d.qarzTotal) || sum(qarzPays, (x) => Number(x.amt) || 0);
@@ -90,8 +91,9 @@
   }
 
   function leaseArt5Html(c, x) {
-    const { groups, lumps } = groupInstForLease(c.inst);
-    if (!groups.length && !lumps.length) {
+    const { groups, lumps, deposits } = groupInstForLease(c.inst);
+    const partsPlan = typeof payParts === 'function' ? payParts(c) : null;
+    if (!groups.length && !lumps.length && !(deposits || []).length) {
       return `<p class=art><b>۱-۵)</b> مبلغ (( ${dots(32)} تومان )) طی ........ قسط مساوی متوالی (یک ماه به یک ماه)، هر قسط به مبلغ (( ${dots(32)} تومان )) که ........ هر ماه باید از سوی مشتری تسلیم شرکت سازنده گردد و سررسید اولین قسط تاریخ ..../..../........ خواهد بود. (توضیح آنکه ماه در این قرارداد سی روز محاسبه می‌گردد.)</p>
 <p class=art><b>۲-۵)</b> مبلغ (( ${dots(32)} تومان )) طی ........ قسط مساوی متوالی (یک ماه به یک ماه)، هر قسط به مبلغ (( ${dots(32)} تومان )) که ........ هر ماه باید از سوی مشتری تسلیم شرکت سازنده گردد و سررسید اولین قسط تاریخ ..../..../........ خواهد بود. (توضیح آنکه ماه در این قرارداد سی روز محاسبه می‌گردد.)</p>
 <p class=art><b>۳-۵)</b> مبلغ (( ${dots(32)} تومان )) طی ........ قسط مساوی متوالی (یک ماه به یک ماه)، هر قسط به مبلغ (( ${dots(32)} تومان )) که ........ هر ماه باید از سوی مشتری تسلیم شرکت سازنده گردد و سررسید اولین قسط تاریخ ..../..../........ خواهد بود. (توضیح آنکه ماه در این قرارداد سی روز محاسبه می‌گردد.)</p>
@@ -99,14 +101,22 @@
 <p class=art><b>تبصره:</b> چنانچه این قرارداد در صورت تخلف مستاجر از پرداخت هر یک از مبالغ مذکور مستند به ماده هشت بند ۲ منفسخ گردد، مبالغ پرداخت‌شده بابت اجاره بها به مستاجر مسترد نمی‌گردد و فقط مبلغ قرض‌الحسنه پس از کسر ۱۵٪ از آن، طی ........ قسط ماه به ماه به مستاجر عودت خواهد شد.</p>`;
     }
     const parts = [];
-    groups.forEach((g, idx) => {
-      const n = idx + 1;
+    if (partsPlan) {
+      parts.push(`<p class=art><b>مقدمه)</b> مبلغ کل قرارداد معادل ((${esc(WW(partsPlan.total))})) است که از این مبلغ ((${esc(WW(partsPlan.down))})) به‌عنوان ${(c.depositLabel || 'پیش‌پرداخت')}، ((${esc(WW(partsPlan.inst))})) در قالب اقساط، و ((${esc(WW(partsPlan.cash))})) به‌صورت نقدی/الباقی توافق و پرداخت می‌گردد.</p>`);
+    }
+    let n = 0;
+    (deposits || []).forEach((d) => {
+      n += 1;
+      parts.push(`<p class=art><b>${F(n)}-۵)</b> مبلغ ((${esc(WW(d.amt))})) بابت ${esc(d.title || 'پیش‌پرداخت')} در تاریخ ${F(d.date)} تسلیم موجر می‌گردد.</p>`);
+    });
+    groups.forEach((g) => {
+      n += 1;
       const day = x.payDayNum || pj(g.first)[2] || 0;
       const dayLabel = dayOrd(day);
       parts.push(`<p class=art><b>${F(n)}-۵)</b> مبلغ ((${esc(WW(g.total))})) طی ${F(g.count)} قسط مساوی متوالی (یک ماه به یک ماه) هر قسط به مبلغ ((${esc(WW(g.amt))})) که ${esc(dayLabel)} هر ماه باید از سوی مشتری تسلیم شرکت سازنده گردد و سررسید اولین قسط تاریخ ${F(g.first)} خواهد بود. (توضیح آنکه ماه در این قرارداد سی روز محاسبه می‌گردد)</p>`);
     });
-    lumps.forEach((lump, i) => {
-      const n = groups.length + i + 1;
+    lumps.forEach((lump) => {
+      n += 1;
       parts.push(`<p class=art><b>${F(n)}-۵)</b> الباقی مبلغ قرارداد معادل(${esc(WW(lump.amt))}) را به صورت نقد تا پایان وقت اداری مورخ ${F(lump.date)} تسلیم موجر نماید.</p>`);
     });
     parts.push(`<p class=art><b>تبصره:</b> چنانچه این قرارداد در صورت تخلف مستاجر از پرداخت هر یک از مبالغ مذکور مستند به ماده هشت بند ۲ منفسخ گردد، مبالغ پرداخت‌شده بابت اجاره بها به مستاجر مسترد نمی‌گردد و فقط مبلغ قرض‌الحسنه پس از کسر ۱۵٪ از آن، طی ${F(x.qarzRefundCount)} قسط ماه به ماه به مستاجر عودت خواهد شد.</p>`);
@@ -139,11 +149,12 @@
 
   function leaseDoc(c, cu, p, u) {
     const x = leaseDocData(c, cu, p, u);
-    const art5 = leaseArt5Html(c, x);
+    const deposit=c.inst.find(i=>i.kind==='deposit');
+    const art5=(deposit?'<p class=art>'+esc(c.depositLabel||deposit.title)+' به مبلغ '+T(deposit.amt)+' با سررسید '+F(deposit.date)+'</p>':'')+leaseArt5Html({...c,inst:c.inst.filter(i=>i!==deposit)},x);
     const art9 = leaseQarzHtml(x);
     const qarzAmt = x.qarzTotal ? WW(x.qarzTotal) : dots(32) + ' تومان';
     const qarzWho = `${esc(x.title)} ${esc(x.name)}`;
-    const head = legalHead(c.no, c.date, '« بسمه تعالی »', 'قرارداد اجاره به شرط تملیک');
+    const head = legalHead(c.no, c.date, '« بسمه تعالی »', 'قرارداد اجاره به شرط تملیک') + ownershipPrint(c);
 
     const p1 = `${head}
 <p class=art-title>ماده ۱) طرفین قرارداد:</p>
@@ -204,32 +215,6 @@ ${art9}
     return legalPages([p1, p2, p3, p4], leaseFoot());
   }
 
-  function qarzSuggestionFromContract(c) {
-    const downs = typeof contractDownInsts === 'function'
-      ? contractDownInsts(c)
-      : (c.inst || []).filter((i) => /پیش\s*پرداخت|بیعانه|قرض\s*الحسنه/.test(String(i.title || '')));
-    if (!downs.length) return null;
-    const pays = downs.map((i) => {
-      const rowPays = typeof instPays === 'function' ? instPays(i) : (Array.isArray(i.pays) ? i.pays : []);
-      const firstPay = rowPays[0] || null;
-      return {
-        id: uid(),
-        amt: Number(i.amt) || 0,
-        date: i.pdate || firstPay?.date || i.date || '',
-        bank: '',
-        ref: firstPay?.ref || i.ref || '',
-      };
-    }).filter((r) => r.amt || r.date || r.ref);
-    if (!pays.length) return null;
-    return { qarzPays: pays, qarzTotal: sum(pays, (r) => Number(r.amt) || 0) };
-  }
-
-  function qarzRowsEmpty(rows, total) {
-    const list = Array.isArray(rows) ? rows : [];
-    const hasRow = list.some((r) => Number(r.amt) || r.date || r.bank || r.ref);
-    return !hasRow && !(Number(total) > 0);
-  }
-
   function leaseDocDefaults(c, cu, p, u) {
     const d = c.doc || {};
     let end = d.end || '';
@@ -237,17 +222,8 @@ ${art9}
       const months = parseInt(N(c.dur), 10);
       if (months > 0) end = addM(c.date, months);
     }
-    let qarzPays = Array.isArray(d.qarzPays) && d.qarzPays.length ? d.qarzPays.map((r) => ({ ...r })) : [{ id: uid(), amt: 0, date: '', bank: '', ref: '' }];
-    let qarzTotal = d.qarzTotal || 0;
-    if (qarzRowsEmpty(qarzPays, qarzTotal)) {
-      const sug = qarzSuggestionFromContract(c);
-      if (sug) {
-        qarzPays = sug.qarzPays;
-        qarzTotal = sug.qarzTotal;
-      }
-    }
     return {
-      title: d.title || 'خانم',
+      title: d.title || '',
       birth: d.birth || '',
       addr: d.addr || cu.addr || '',
       phone: d.phone || cu.phone || '',
@@ -258,17 +234,16 @@ ${art9}
       start: d.start || c.date || '',
       end,
       handDate: d.handDate || c.hand || c.date || '',
-      qarzTotal,
-      qarzPays,
-      qarzTotalManual: !!(Number(d.qarzTotal) > 0 && Array.isArray(d.qarzPays) && d.qarzPays.length && Math.abs(Number(d.qarzTotal) - sum(d.qarzPays, (x) => Number(x.amt) || 0)) > 0.5),
+      qarzTotal: d.qarzTotal || 0,
+      qarzPays: Array.isArray(d.qarzPays) && d.qarzPays.length ? d.qarzPays : [{ id: uid(), amt: 0, date: '', bank: '', ref: '' }],
       payDayLabel: parsePayDay(d.payDayLabel) || '',
-      coolDays: d.coolDays != null && d.coolDays !== '' ? parseDays(d.coolDays, LEASE_PAY_DEFAULTS.coolDays) : (c.doc ? parseDays(d.coolDays, 0) : LEASE_PAY_DEFAULTS.coolDays),
-      qarzRefundCount: d.qarzRefundCount != null && d.qarzRefundCount !== '' ? parseDays(d.qarzRefundCount, LEASE_PAY_DEFAULTS.qarzRefundCount) : (c.doc ? parseDays(d.qarzRefundCount, 0) : LEASE_PAY_DEFAULTS.qarzRefundCount),
-      payBank: d.payBank ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.payBank),
-      payCard: d.payCard ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.payCard),
-      paySheba: d.paySheba ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.paySheba),
-      payAcct: d.payAcct ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.payAcct),
-      payName: d.payName ?? (c.doc ? '' : LEASE_PAY_DEFAULTS.payName),
+      coolDays: parseDays(d.coolDays, LEASE_PAY_DEFAULTS.coolDays),
+      qarzRefundCount: parseDays(d.qarzRefundCount, LEASE_PAY_DEFAULTS.qarzRefundCount),
+      payBank: d.payBank || (c.accountId?'':LEASE_PAY_DEFAULTS.payBank),
+      payCard: d.payCard || (c.accountId?'':LEASE_PAY_DEFAULTS.payCard),
+      paySheba: d.paySheba || (c.accountId?'':LEASE_PAY_DEFAULTS.paySheba),
+      payAcct: d.payAcct || (c.accountId?'':LEASE_PAY_DEFAULTS.payAcct),
+      payName: d.payName || (c.accountId?'':LEASE_PAY_DEFAULTS.payName),
     };
   }
 
@@ -281,33 +256,18 @@ ${art9}
     const u = unitOf(c.proj, c.unit);
     const init = leaseDocDefaults(c, cu, p, u);
     const m = $('#modal');
-    const refreshQarzTotalField = () => {
-      const el = m.querySelector('[name=qarzTotal]');
-      if (!el) return;
-      if (!init.qarzTotalManual) {
-        const total = sum(init.qarzPays, (r) => Number(r.amt) || 0);
-        init.qarzTotal = total;
-        el.value = total ? money(total) : '';
-        paintMoneyWords(el);
-      }
-    };
     const qarzRows = () => {
       const box = m.querySelector('#qarzBox');
       if (!box) return;
       box.innerHTML = init.qarzPays.map((row, i) => `<div class="qarz-row" data-i="${i}">
-      <label>مبلغ (تومان)<input data-k="amt" data-money inputmode="numeric" value="${esc(row.amt ? money(row.amt) : '')}"></label>
+      <label>مبلغ (تومان)<input data-k="amt" inputmode="numeric" value="${esc(row.amt ? money(row.amt) : '')}"></label>
       <label>تاریخ واریز<input data-k="date" readonly style="cursor:pointer" value="${row.date ? F(row.date) : ''}" placeholder="انتخاب از تقویم"></label>
       <label>بانک<input data-k="bank" value="${esc(row.bank || '')}"></label>
       <label>شماره پیگیری<input data-k="ref" value="${esc(row.ref || '')}"></label>
       <button type="button" class="sm x" data-del="${i}">حذف</button>
     </div>`).join('');
       box.querySelectorAll('[data-k=amt]').forEach((el) => {
-        el.oninput = () => {
-          fmtMoney(el);
-          syncQarzFromDom();
-          refreshQarzTotalField();
-        };
-        paintMoneyWords(el);
+        el.oninput = () => { const v = Math.round(num(el.value)); el.value = v ? F(v.toLocaleString('en')) : ''; };
       });
       box.querySelectorAll('[data-k=date]').forEach((el) => bindDate(el));
       box.querySelectorAll('[data-del]').forEach((btn) => {
@@ -316,7 +276,6 @@ ${art9}
           init.qarzPays.splice(+btn.dataset.del, 1);
           if (!init.qarzPays.length) init.qarzPays.push({ id: uid(), amt: 0, date: '', bank: '', ref: '' });
           qarzRows();
-          refreshQarzTotalField();
         };
       });
     };
@@ -334,40 +293,6 @@ ${art9}
         };
       });
     };
-    const applyQarzSuggestion = (force) => {
-      const sug = qarzSuggestionFromContract(c);
-      if (!sug) return toast('در جدول اقساط قرارداد، ردیف پیش‌پرداخت پیدا نشد');
-      if (!force && !qarzRowsEmpty(init.qarzPays, init.qarzTotal)) {
-        askConfirm({
-          title: 'همگام‌سازی قرض‌الحسنه',
-          body: '<p>مقادیر فعلی قرض‌الحسنه با پیش‌پرداخت قرارداد جایگزین شود؟</p><p class=fd>در صورت نیاز بعداً می‌توانید ردیف‌ها را دستی اصلاح کنید.</p>',
-          okLabel: 'بله، همگام شود',
-        }, () => {
-          init.qarzPays = sug.qarzPays;
-          init.qarzTotal = sug.qarzTotal;
-          init.qarzTotalManual = false;
-          const manual = m.querySelector('[name=qarzTotalManual]');
-          if (manual) manual.checked = false;
-          const tot = m.querySelector('[name=qarzTotal]');
-          if (tot) tot.readOnly = true;
-          qarzRows();
-          refreshQarzTotalField();
-          toast('قرض‌الحسنه از پیش‌پرداخت پر شد');
-          return true;
-        });
-        return;
-      }
-      init.qarzPays = sug.qarzPays;
-      init.qarzTotal = sug.qarzTotal;
-      init.qarzTotalManual = false;
-      const manual = m.querySelector('[name=qarzTotalManual]');
-      if (manual) manual.checked = false;
-      const tot = m.querySelector('[name=qarzTotal]');
-      if (tot) tot.readOnly = true;
-      qarzRows();
-      refreshQarzTotalField();
-      toast('قرض‌الحسنه از پیش‌پرداخت پر شد');
-    };
     m.innerHTML = `<div class="box lease-box">
     <div class="lease-form-head">
       <h3>تکمیل فیلدهای قرارداد اجاره به شرط تملیک</h3>
@@ -375,10 +300,15 @@ ${art9}
     </div>
     ${crmSnapHtml(c, cu, p, u)}
     <div class=lease-sec>
+      <h4>۰. قیمت تمام‌شده و نحوه پرداخت</h4>
+      ${typeof payPlanHtml === 'function' ? payPlanHtml(c) : ''}
+      <p class=fd>پیش‌پرداخت، نقدی و اقساط از پرونده قرارداد خوانده می‌شود. برای تغییر مبالغ روی «ویرایش قیمت و نحوه پرداخت» در کادر بالا بزنید.</p>
+    </div>
+    <div class=lease-sec>
       <h4>۱. طرفین</h4>
       <div class=grid>
         <label>عنوان مستاجر
-          <select name=title>
+          <select name=title><option value="">انتخاب عنوان</option>
             <option value="آقای">آقای</option>
             <option value="خانم">خانم</option>
             <option value="آقای/خانم">آقای/خانم</option>
@@ -406,18 +336,13 @@ ${art9}
         <label>تاریخ تسلیم مورد اجاره<input name=handDate readonly style="cursor:pointer" placeholder="انتخاب از تقویم"></label>
         <label>روز ثابت پرداخت هر ماه (۱ تا ۳۱)<input name=payDayLabel inputmode=numeric placeholder="مثلاً ۱۰"></label>
         <label>مهلت فسخ بدون خسارت (روز)<input name=coolDays inputmode=numeric placeholder="مثلاً ۳۰"></label>
-        <label>تعداد اقساط عودت قرض‌الحسنه<input name=qarzRefundCount inputmode=numeric placeholder="مثلاً ۸"><small class=fd>فقط برای تبصره فسخ: اگر قرارداد به‌خاطر تخلف فسخ شود، قرض‌الحسنه پس از کسر ۱۵٪ طی چند قسط ماهانه عودت می‌شود. روی جدول اقساط فروش اثر ندارد.</small></label>
+        <label>تعداد اقساط عودت قرض‌الحسنه<input name=qarzRefundCount inputmode=numeric placeholder="مثلاً ۸"></label>
       </div>
     </div>
     <div class=lease-sec>
       <h4>۴. قرض‌الحسنه</h4>
-      <p class=fd style="margin:0 0 10px">برای جلوگیری از ثبت تکراری، این بخش از پیش‌پرداخت قرارداد پر می‌شود. در صورت نیاز می‌توانید ردیف‌ها یا جمع را دستی اصلاح کنید.</p>
-      <div class=act style="justify-content:flex-start;margin:0 0 10px;padding:0;border:0">
-        <button type=button class="sm btn-soft" id=syncQarzDown>همگام‌سازی از پیش‌پرداخت قرارداد</button>
-      </div>
       <div class=grid>
-        <label>جمع قرض‌الحسنه (تومان)<input name=qarzTotal data-money inputmode=numeric ${init.qarzTotalManual ? '' : 'readonly'}><small class=fd>پیش‌فرض برابر جمع ردیف‌های واریز است.</small></label>
-        <label class=chk-lab style="align-self:end"><span class=chkline><input type=checkbox name=qarzTotalManual ${init.qarzTotalManual ? 'checked' : ''}> ویرایش دستی جمع</span></label>
+        <label>جمع قرض‌الحسنه (تومان) – خالی = جمع ردیف‌ها<input name=qarzTotal inputmode=numeric></label>
       </div>
       <div id=qarzBox class=qarz-box></div>
       <button type=button class="sm btn-soft" id=addQarz><span class=plus>+</span> ردیف واریز</button>
@@ -447,12 +372,14 @@ ${art9}
     set('qarzRefundCount', init.qarzRefundCount ? F(init.qarzRefundCount) : '');
     set('payBank', init.payBank); set('payCard', init.payCard); set('paySheba', init.paySheba); set('payAcct', init.payAcct); set('payName', init.payName);
     m.querySelector('[name=qarzTotal]').value = init.qarzTotal ? money(init.qarzTotal) : '';
-    m.querySelector('[name=qarzTotal]').oninput = function () { fmtMoney(this); };
-    paintMoneyWords(m.querySelector('[name=qarzTotal]'));
+    m.querySelector('[name=qarzTotal]').oninput = function () { fmtIn(this); };
     ['birth', 'start', 'end', 'handDate'].forEach((k) => {
       const e = m.querySelector(`[name=${k}]`);
       e.value = init[k] ? F(init[k]) : '';
       bindDate(e);
+    });
+    m.querySelectorAll('input[inputmode=numeric],input[inputmode=decimal],input[inputmode=tel]').forEach((el) => {
+      if (typeof bindFaDigits === 'function') bindFaDigits(el);
     });
     hintFor(m.querySelector('[name=coolDays]'), (v) => {
       const n = parseDays(v, 0);
@@ -464,30 +391,13 @@ ${art9}
     });
     hintFor(m.querySelector('[name=qarzRefundCount]'), (v) => {
       const n = parseDays(v, 0);
-      return n ? `در تبصره ماده ۵: طی ${F(n)} قسط ماهانه عودت` : 'فقط برای تبصره فسخ؛ روی اقساط فروش اثر ندارد';
+      return n ? `در تبصره ماده ۵: طی ${F(n)} قسط` : '';
     });
     qarzRows();
-    refreshQarzTotalField();
-    const manualEl = m.querySelector('[name=qarzTotalManual]');
-    const totalEl = m.querySelector('[name=qarzTotal]');
-    if (manualEl && totalEl) {
-      manualEl.onchange = () => {
-        init.qarzTotalManual = !!manualEl.checked;
-        totalEl.readOnly = !init.qarzTotalManual;
-        if (!init.qarzTotalManual) refreshQarzTotalField();
-      };
-      totalEl.oninput = function () {
-        if (!init.qarzTotalManual) return;
-        fmtMoney(this);
-        init.qarzTotal = num(this.value);
-      };
-    }
-    m.querySelector('#syncQarzDown').onclick = () => applyQarzSuggestion(false);
     m.querySelector('#addQarz').onclick = () => {
       syncQarzFromDom();
       init.qarzPays.push({ id: uid(), amt: 0, date: '', bank: '', ref: '' });
       qarzRows();
-      refreshQarzTotalField();
     };
     m.querySelector('#ok').onclick = () => {
       syncQarzFromDom();
@@ -510,8 +420,14 @@ ${art9}
         bank: r.bank || '',
         ref: r.ref || '',
       }));
-      const manual = !!m.querySelector('[name=qarzTotalManual]')?.checked;
-      const qarzTotal = manual ? (num(g('qarzTotal')) || sum(qarzPays, (r) => r.amt)) : sum(qarzPays, (r) => r.amt);
+      const refs=new Set();
+      for(const row of qarzPays){
+        const key=refKey(row.ref);if(!key)continue;
+        if(refs.has(key)){toast('شماره پیگیری در ردیف‌های ودیعه تکراری است');return}
+        if(!assertPayRef(row.ref,{kind:'qarz',contract:c.id}))return;
+        refs.add(key);
+      }
+      const qarzTotal = num(g('qarzTotal')) || sum(qarzPays, (r) => r.amt);
       c.doc = {
         ...(c.doc || {}),
         title: g('title') || 'آقای/خانم',

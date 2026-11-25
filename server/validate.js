@@ -72,7 +72,7 @@ function cleanDoc(html) {
   }).slice(0, 500000);
 }
 
-const unitFieldsSchema = z.object({
+const unitSchema = z.object({
   id,
   no: z.string().trim().min(1).max(40),
   floor: text(40),
@@ -93,29 +93,10 @@ const unitFieldsSchema = z.object({
   storageArea: asNumber(1e5).default(0).optional(),
   handReady: z.boolean().default(false).optional(),
   handDate: jdateOrEmpty.default(''),
-  dangSplit: z.boolean().default(false).optional(),
-  owners: z.array(z.object({
-    id,
-    custId: id,
-    dang: z.preprocess((value) => {
-      if (typeof value === 'string') {
-        const n = Number(normalizeDigits(value).replace(/[,٬،\s]/g, ''));
-        return Number.isFinite(n) ? n : value;
-      }
-      return value;
-    }, z.number().finite().gt(0).max(6)),
-    note: text(200),
-  })).max(12).default([]).optional(),
 });
 
-const unitSchema = z.preprocess((raw) => {
-  if (!raw || typeof raw !== 'object') return raw;
-  // Drop leftover owners before schema checks when dang split is off.
-  if (!raw.dangSplit) return { ...raw, owners: [] };
-  return raw;
-}, unitFieldsSchema);
-
 const projectSchema = z.object({
+  accountId: text(32).optional(),
   id,
   name: z.string().trim().min(1).max(200),
   addr: text(500),
@@ -159,28 +140,16 @@ const optionalPct = z.preprocess((value) => {
   return value;
 }, z.number().finite().min(0).max(100).optional());
 
-const instPaySchema = z.object({
-  id: z.string().trim().min(1).max(40),
-  amt: asNumber(),
-  date: jdate,
-  ref: z.string().trim().max(80).default(''),
-  note: text(500),
-  overFrom: z.string().trim().max(40).default('').optional(),
-});
-
 const instSchema = z.object({
+  parts: z.array(z.object({id, amt:z.number().int().positive().max(1e15), date:jdate, ref:text(80), owner:id, name:text(200), fee:asNumber().default(0), note:text(1000)})).max(200).optional(),
   id,
   title: z.string().trim().max(200).default(''),
   amt: asNumber(),
   date: jdate,
   paid: z.boolean(),
   pdate: jdateOrEmpty.default(''),
-  ref: z.string().trim().max(200).default(''),
+  ref: z.string().trim().max(80).default(''),
   kind: z.preprocess((value) => (value == null || value === '' ? '' : String(value).trim()), z.string().max(20)).optional(),
-  fromPayId: z.string().trim().max(40).default('').optional(),
-  payer: text(200),
-  acct: text(80),
-  pays: z.array(instPaySchema).max(100).default([]).optional(),
   latePctDaily: optionalPct,
   lateDays: asNumber(1e6).default(0).optional(),
   lateCalc: asNumber().default(0).optional(),
@@ -227,6 +196,15 @@ const contractDocFields = z.object({
 });
 
 const contractSchema = z.object({
+  sourceFields: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,140}$/),text(1000)).optional(),
+  installBudget:asNumber().optional(),
+  owners: z.array(z.object({customer:id,share:z.number().int().min(1).max(6000)})).min(1).max(100).optional(),
+  reservationId: z.union([id,z.literal('')]).optional(),
+  transfers: z.array(z.object({date:jdate,from:id,to:id,fromName:text(200),toName:text(200),by:text(200)})).max(200).optional(),
+  // کلید نرخ سالانه: شماره سالگرد قسط اول (۱،۲،…) یا سال شمسی قدیمی برای سازگاری
+  rates: z.record(z.string().regex(/^(?:1[3-5]\d{2}|[1-9]\d{0,2})$/),asNumber()).optional(),
+  depositLabel: z.enum(['پیش‌پرداخت','قرض‌الحسنه']).optional(),
+  accountId: text(32).optional(),
   id,
   no: docNo,
   type: z.enum(['lease', 'partner', 'invest']),
@@ -246,10 +224,7 @@ const contractSchema = z.object({
   note: text(4000),
   latePctDaily: asNumber(100).default(0).optional(),
   auto: z.boolean().optional(),
-  resId: z.preprocess((value) => {
-    if (value == null || value === '') return '';
-    return String(value).trim();
-  }, z.union([z.literal(''), id])).optional(),
+  autoMode: z.enum(['off', 'all', 'year']).optional(),
   inst: z.array(instSchema).max(500).default([]),
   fac: z.array(z.object({
     t: z.string().trim().max(80),
@@ -275,6 +250,8 @@ const paySchema = z.object({
 });
 
 const reservationSchema = z.object({
+  sourceFields: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,140}$/),text(1000)).optional(),
+  plannedCash:asNumber().optional(),plannedInstallments:asNumber().optional(),
   id,
   no: docNo,
   cust: id,
@@ -414,6 +391,8 @@ const stateSchema = z.object({
   ledger: z.array(ledgerSchema).max(100000).default([]),
   checks: z.array(checkSchema).max(50000).default([]),
   cfg: z.object({
+    drafts: z.array(z.object({id,values:z.record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9]{0,30}$/),z.union([z.string().max(4000),z.boolean(),z.number().finite()]))})).max(500).optional(),
+    accounts: z.array(z.object({id,bank:text(100),holder:text(160),iban:text(32),card:text(24),number:text(40),branch:text(80)})).max(300).optional(),
     fine: asNumber().optional(),
     days: z.preprocess((value) => value == null || value === '' ? undefined : Number(value), z.number().int().min(1).max(3650).optional()),
   }).default({}),
@@ -528,93 +507,75 @@ export function validateState(raw) {
     for (const unit of project.units) {
       if (unitIds.has(unit.id)) throw new AppError(`شماره داخلی واحد در پروژه ${project.name} تکراری است`);
       unitIds.add(unit.id);
-      unit.dangSplit = !!unit.dangSplit;
-      unit.owners = Array.isArray(unit.owners) ? unit.owners : [];
-      if (!unit.dangSplit) unit.owners = [];
     }
   }
 
   const projectMap = new Map(data.projects.map((project) => [project.id, project]));
   const customerIds = new Set(data.customers.map((customer) => customer.id));
-
-  for (const project of data.projects) {
-    for (const unit of project.units) {
-      if (!unit.dangSplit) continue;
-      const seenOwners = new Set();
-      let dangTotal = 0;
-      for (const owner of unit.owners) {
-        if (!customerIds.has(owner.custId)) {
-          throw new AppError(`مالک دانگی واحد ${unit.no} در پروژه ${project.name} به مشتری ناموجود وصل است`);
-        }
-        if (seenOwners.has(owner.custId)) {
-          throw new AppError(`مشتری تکراری در مالکیت دانگی واحد ${unit.no} (پروژه ${project.name})`);
-        }
-        seenOwners.add(owner.custId);
-        dangTotal += Number(owner.dang) || 0;
-      }
-      if (dangTotal > 6 + 1e-9) {
-        throw new AppError(`جمع دانگ واحد ${unit.no} در پروژه ${project.name} نمی‌تواند بیش از ۶ باشد`);
-      }
-    }
-  }
   const instIds = new Set();
   const payIds = new Set();
-  const refs = new Set();
+  const banks=data.cfg.accounts||[];
+  assertUnique(banks,'شناسه حساب بانکی');
+  assertUnique(data.cfg.drafts||[],'شناسه پیش‌نویس');
+  const bankIds=new Set(banks.map(a=>a.id));
+  for(const item of [...data.projects,...data.contracts]){
+    if(item.accountId&&!bankIds.has(item.accountId))throw new AppError('حساب بانکی انتخاب‌شده پیدا نشد');
+  }
+  const refs = new Map();
 
-  const rememberRef = (ref) => {
+  const rememberRef = (ref, source) => {
     const key = canonRef(ref);
     if (!key) return;
-    if (refs.has(key)) throw new AppError(`شماره پیگیری «${ref}» تکراری است و بیش از یک بار ثبت شده`);
-    refs.add(key);
+    if (refs.has(key)) throw new AppError(`شماره پیگیری «${ref}» تکراری است؛ ثبت قبلی: ${refs.get(key)}، ثبت دیگر: ${source}`);
+    refs.set(key, source);
   };
-
-  const reservationMap = new Map(data.reservations.map((reservation) => [reservation.id, reservation]));
-  const resIdsSeen = new Set();
 
   for (const contract of data.contracts) {
     if (!customerIds.has(contract.cust)) throw new AppError(`قرارداد ${contract.no} به مشتری ناموجود وصل است`);
+    if(contract.installBudget>contract.total)throw new AppError('سهم اقساط از مبلغ کل بیشتر است');
+    if(contract.owners){
+      const ids = new Set(contract.owners.map(o=>o.customer));
+      if(ids.size!==contract.owners.length || contract.owners[0].customer!==contract.cust ||
+          contract.owners.some(o=>!customerIds.has(o.customer)) || contract.owners.reduce((n,o)=>n+o.share,0)!==6000)
+        throw new AppError('خریداران و مجموع شش دانگ قرارداد را بررسی کنید');
+    }
     const project = projectMap.get(contract.proj);
     if (!project || !project.units.some((unit) => unit.id === contract.unit)) {
       throw new AppError(`قرارداد ${contract.no} به واحد ناموجود وصل است`);
     }
-    if (contract.resId) {
-      const reservation = reservationMap.get(contract.resId);
-      if (!reservation) throw new AppError(`قرارداد ${contract.no} به رزرو ناموجود وصل است`);
-      if (resIdsSeen.has(contract.resId)) throw new AppError(`بیش از یک قرارداد به رزرو ${reservation.no} وصل شده`);
-      resIdsSeen.add(contract.resId);
-      if (reservation.cust !== contract.cust) throw new AppError(`مشتری قرارداد ${contract.no} با رزرو مبدأ یکی نیست`);
-      if (reservation.proj !== contract.proj || reservation.unit !== contract.unit) {
-        throw new AppError(`واحد قرارداد ${contract.no} با رزرو مبدأ یکی نیست`);
-      }
-      if (reservation.st !== 'conv') reservation.st = 'conv';
-      for (const pay of reservation.pays || []) {
-        if (pay.s === 'ok' || !pay.s) pay.s = 'used';
-      }
-    } else {
-      contract.resId = '';
+    let lastOwner=null,lastDate=contract.date;
+    for(const change of contract.transfers||[]){
+      if(change.date<lastDate||change.from===change.to||lastOwner&&lastOwner!==change.from)throw new AppError('ترتیب انتقال‌های قرارداد معتبر نیست');
+      lastOwner=change.to;lastDate=change.date;
     }
+    if(lastOwner&&lastOwner!==contract.cust)throw new AppError('خریدار فعلی با آخرین انتقال قرارداد مغایرت دارد');
     for (const inst of contract.inst) {
       if (instIds.has(inst.id)) throw new AppError('شناسه قسط تکراری است');
       instIds.add(inst.id);
-      inst.pays = Array.isArray(inst.pays) ? inst.pays : [];
-      let received = 0;
-      for (const pay of inst.pays) {
-        if (!(pay.amt > 0)) throw new AppError(`مبلغ پرداخت قسط «${inst.title || 'قسط'}» در قرارداد ${contract.no} معتبر نیست`);
-        received += Number(pay.amt) || 0;
-        rememberRef(pay.ref);
-      }
-      if (!inst.pays.length && inst.paid && inst.ref) rememberRef(inst.ref);
-      if (inst.pays.length) {
-        inst.paid = received + 1e-9 >= Number(inst.amt || 0);
-        const last = inst.pays[inst.pays.length - 1];
-        inst.pdate = last.date || inst.pdate || '';
-        inst.ref = inst.pays.map((pay) => pay.ref).filter(Boolean).join('، ');
-      }
+      const label = contract.no + ' / ' + inst.title;
+      if (inst.parts) {
+        assertUnique(inst.parts, 'شناسه دریافت');
+        let amount=0;
+        for (const part of inst.parts) {
+          if (!customerIds.has(part.owner)) throw new AppError('مشتری پرداخت نامعتبر است');
+          rememberRef(part.ref, label+' / '+part.date+' / '+part.amt);
+          amount+=part.amt;
+        }
+        inst.paid=amount>0 && amount>=inst.amt;
+        const last=inst.parts.at(-1);
+        inst.pdate=last?.date||'';
+        inst.ref=last?.ref||'';
+        inst.lateFee=inst.parts.reduce((n,x)=>n+x.fee,0);
+      } else if(inst.paid) rememberRef(inst.ref,label);
+
     }
+    for(const pay of contract.doc?.qarzPays||[]) rememberRef(pay.ref,contract.no+" / ودیعه "+pay.date);
     contract.ed = cleanEd(contract.ed);
   }
 
   for (const reservation of data.reservations) {
+    if((reservation.plannedCash||reservation.plannedInstallments)&&reservation.doc?.total>0&&
+      reservation.need+(reservation.plannedCash||0)+(reservation.plannedInstallments||0)>reservation.doc.total)throw new AppError('مجموع برنامه پرداخت رزرو بیشتر از قیمت واحد است');
     if (!customerIds.has(reservation.cust)) throw new AppError(`رزرو ${reservation.no} به مشتری ناموجود وصل است`);
     const project = projectMap.get(reservation.proj);
     if (!project || !project.units.some((unit) => unit.id === reservation.unit)) {
@@ -623,8 +584,7 @@ export function validateState(raw) {
     for (const pay of reservation.pays) {
       if (payIds.has(pay.id)) throw new AppError('شناسه پرداخت رزرو تکراری است');
       payIds.add(pay.id);
-      // پرداخت‌های مصرف‌شده در قرارداد (used) از uniqueness کنار گذاشته می‌شوند چون ref روی قسط کپی شده
-      if (pay.s !== 'used') rememberRef(pay.ref);
+      rememberRef(pay.ref,reservation.no+" / "+pay.date+" / "+pay.amt);
     }
     reservation.ed = cleanEd(reservation.ed);
   }
@@ -694,7 +654,7 @@ export function validateState(raw) {
       row.source = 'manual';
       row.checkId = '';
     }
-    rememberRef(row.ref);
+    rememberRef(row.ref,"حسابداری / "+(row.desc||row.id));
   }
 
   const ledgerIds = new Set(data.ledger.map((row) => row.id));

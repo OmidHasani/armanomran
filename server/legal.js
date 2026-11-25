@@ -1,3 +1,4 @@
+import {received,outstanding} from './receipts.js';
 import { Contract, Customer, LegalCase, Meta, Project, Reservation } from './models.js';
 import { AppError } from './validate.js';
 import { diffDays, uid } from './dates.js';
@@ -38,7 +39,7 @@ async function settings() {
 }
 
 function paidSum(contract) {
-  return (contract.inst || []).filter((i) => i.paid).reduce((s, i) => s + (i.amt || 0), 0);
+  return (contract.inst || []).reduce((s,i)=>s+received(i),0);
 }
 
 export async function getAdminSettings() {
@@ -127,11 +128,11 @@ export async function syncLegalReferrals(by = 'سامانه') {
           paid: false,
         },
         chart: {
-          due: inst.amt || 0,
+          due: outstanding(inst),
           paid,
           remaining: Math.max(0, contract.total - paid),
           contractTotal: contract.total,
-          overdueAmt: inst.amt || 0,
+          overdueAmt: outstanding(inst),
         },
         follows: [],
         timeline: [makeTimelineEvent('create', systemUser, {

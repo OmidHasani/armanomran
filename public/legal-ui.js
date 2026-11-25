@@ -40,6 +40,8 @@
     paint();
   }
   function crmSnapHtml(c, cu, p, u) {
+    const parts = typeof payParts === 'function' ? payParts(c) : { total: c.total || 0, down: 0, cash: 0, inst: 0, instRows: c.inst || [] };
+    const plan = typeof payPlanHtml === 'function' ? payPlanHtml(c) : '';
     return `<div class="crm-snap">
       <div class="crm-snap-h">اطلاعات متصل از سامانه</div>
       <div class="crm-snap-grid">
@@ -55,19 +57,20 @@
         <div class="span2"><span>نشانی پروژه</span><b>${esc(p.addr || '—')}</b></div>
         <div><span>شماره قرارداد</span><b>${esc(c.no || '—')}</b></div>
         <div><span>تاریخ قرارداد</span><b>${F(c.date || '—')}</b></div>
-        <div><span>مبلغ کل</span><b>${c.total ? money(c.total) + ' تومان' : '—'}</b></div>
         <div><span>مدت</span><b>${c.dur ? F(c.dur) + ' ماه' : '—'}</b></div>
-        <div><span>تعداد اقساط</span><b>${F((c.inst || []).length)}</b></div>
-        ${(() => {
-          const downs = (c.inst || []).filter((i) => /پیش\s*پرداخت|بیعانه|قرض\s*الحسنه/.test(String(i.title || '')));
-          const downAmt = downs.reduce((s, i) => s + (Number(i.amt) || 0), 0);
-          const paid = typeof paidSum === 'function' ? paidSum(c) : 0;
-          const rem = Math.max(0, (Number(c.total) || 0) - paid);
-          return `${downAmt ? `<div><span>پیش‌پرداخت ثبت‌شده</span><b>${money(downAmt)} تومان</b></div>` : ''}
-        <div><span>مانده بدهی</span><b>${money(rem)} تومان</b></div>`;
-        })()}
+        <div><span>تعداد اقساط</span><b>${F((parts.instRows || []).length)}</b></div>
       </div>
-      <p class="fd" style="margin:8px 0 0">نام، کد ملی، پروژه، واحد، مبلغ و اقساط از پرونده‌ها خوانده می‌شود. اگر چیزی این‌جا غلط است همان پرونده را اصلاح کنید تا متن قرارداد هم درست شود. مبلغ قرض‌الحسنه را می‌توانید از پیش‌پرداخت همین قرارداد همگام کنید.</p>
+      <div class="crm-snap-pay">
+        <div class="pay-break-h" style="margin-top:12px">قیمت تمام‌شده و نحوه پرداخت</div>
+        ${plan || `<div class="pay-plan-grid">
+          <div><span>قیمت تمام‌شده</span><b>${money(parts.total)}</b></div>
+          <div><span>پیش‌پرداخت</span><b>${money(parts.down)}</b></div>
+          <div><span>اقساط</span><b>${money(parts.inst)}</b></div>
+          <div><span>نقدی</span><b>${money(parts.cash)}</b></div>
+        </div>`}
+        <p class="fd" style="margin:8px 0 0">برای تغییر این مبالغ از «ویرایش قرارداد» استفاده کنید؛ متن رسمی از همین تفکیک ساخته می‌شود.</p>
+        ${typeof can === 'function' && can('write') ? `<button type="button" class="sm btn-soft" onclick="closeM();editC('${c.id}')">ویرایش قیمت و نحوه پرداخت</button>` : ''}
+      </div>
     </div>`;
   }
   function leaseFoot() {

@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { LegalCase, OrgUnit, User } from './models.js';
-import { normalizeUnitIds } from './perms.js';
+import { PERM_DEFS,normalizeUnitIds } from './perms.js';
 import { AppError } from './validate.js';
 import { uid } from './dates.js';
 
@@ -11,6 +11,7 @@ export function serializeUnit(doc) {
   return {
     id: String(doc._id),
     name: doc.name || '',
+    perms:doc.perms||[],
     code: doc.code || '',
     note: doc.note || '',
     active: doc.active !== false,
@@ -115,23 +116,6 @@ export async function ensureLegalUnit() {
     { $addToSet: { unitIds: legalId } },
   );
 
-  // Remove inactive / demoted from legal unit (keep other units)
-  const stale = normalizeUnitIds(unit.memberIds).filter((id) => !legalMemberIds.includes(id));
-  if (stale.length) {
-    await User.updateMany(
-      { _id: { $in: stale }, role: { $ne: 'legal' } },
-      { $pull: { unitIds: legalId } },
-    );
-    // Also remove inactive legal-role users from membership display
-    await User.updateMany(
-      { _id: { $in: stale }, active: false },
-      { $pull: { unitIds: legalId } },
-    );
-  }
-
-  unit.memberIds = legalMemberIds;
-  // Preserve non-role members who were explicitly added? Plan says legal role users auto-join.
-  // Merge any admin-assigned extras that still have unitIds including legal:
   const extras = await User.find({
     unitIds: legalId,
     _id: { $nin: legalMemberIds },
@@ -178,6 +162,7 @@ export async function createUnit(body) {
       _id: uid(),
       name,
       code,
+      perms:PERM_DEFS.filter(p=>p.k!=='admin'&&body?.perms?.includes(p.k)).map(p=>p.k),
       note: note.slice(0, 1000),
       active,
       memberIds,
@@ -196,6 +181,7 @@ export async function createUnit(body) {
 export async function updateUnit(id, body) {
   const unit = await OrgUnit.findById(id);
   if (!unit) throw new AppError('واحد سازمانی پیدا نشد', 404);
+  if(Array.isArray(body?.perms))unit.perms=PERM_DEFS.filter(p=>p.k!=='admin'&&body.perms.includes(p.k)).map(p=>p.k);
   if (body?.name != null) {
     const name = String(body.name).trim();
     if (name.length < 2 || name.length > 80) throw new AppError('نام واحد را وارد کنید');

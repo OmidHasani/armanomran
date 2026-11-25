@@ -221,3 +221,6 @@ td .muted{color:var(--mut);font-size:12px}
   .main{padding:16px 12px 28px}
   .stats{grid-template-columns:1fr}
 }
+.activity-table{overflow-x:auto;background:var(--card,#fff);border:1px solid #d9e3df;border-radius:12px;padding:8px}.activity-table table{width:100%;border-collapse:collapse}.activity-table :is(td,th){text-align:start;padding:9px;border-bottom:1px solid #e5ebe8}.activity-table small{display:block;color:#59706b}
+
+@media(max-width:980px){.shell{grid-template-columns:minmax(0,1fr)}.aside,.aside-nav,.content,.panel{min-width:0;max-width:100%}.table-wrap,.activity-table{max-width:100%;overflow-x:auto}}

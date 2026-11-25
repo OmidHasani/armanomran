@@ -1,17 +1,12 @@
+import {OrgUnit as MembershipUnit} from './models.js';
+import {Activity,Visit,activityMiddleware,enter,pulse} from './activity.js';
+import {scopedState} from './state-access.js';
+import {ContractEvent} from './contract-history.js';
+import {mountFiles} from './files.js';
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import mongoose from 'mongoose';
-import multer from 'multer';
-import {
-  attachmentOptions,
-  createAttachment,
-  deleteAttachment,
-  getAttachmentFile,
-  listAttachments,
-  purgeAttachments,
-  updateAttachment,
-} from './attachments.js';
 import { getDummyHash } from './bootstrap.js';
 import {
   addFollowUp,
@@ -28,7 +23,7 @@ import {
   syncLegalReferrals,
   updateLegalStatus,
 } from './legal.js';
-import { User } from './models.js';
+import { User, LegalCase } from './models.js';
 import {
   hasPerm,
   normalizePerms,
@@ -50,6 +45,7 @@ import {
 } from './units.js';
 import { AppError } from './validate.js';
 import {
+  seeWorkNotice,
   addWorkFollowUp,
   assignWorkCase,
   CASE_KINDS,
@@ -64,11 +60,7 @@ import {
 } from './workcases.js';
 
 export const api = Router();
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
-});
+api.use(activityMiddleware);
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -81,6 +73,10 @@ const loginLimit = rateLimit({
   message: { message: 'تلاش‌های ورود بیش از حد است. ۱۵ دقیقه بعد دوباره امتحان کنید.' },
 });
 
+async function unitAccess(user){
+  const units=await MembershipUnit.find({_id:{$in:user.unitIds||[]},active:true}).select('perms').lean();
+  user.$locals.unitPerms=[...new Set(units.flatMap(u=>u.perms||[]))].filter(p=>p!=='admin');
+}
 async function requireAuth(req, res, next) {
   try {
     if (!req.session?.userId) return res.status(401).json({ message: 'وارد نشده‌اید' });
@@ -92,6 +88,7 @@ async function requireAuth(req, res, next) {
     user.role = normalizeRole(user.role);
     user.perms = normalizePerms(user.role, user.perms);
     user.unitIds = normalizeUnitIds(user.unitIds);
+    await unitAccess(user);
     req.user = user;
     next();
   } catch (err) {
@@ -140,6 +137,7 @@ api.post('/auth/login', loginLimit, wrap(async (req, res) => {
   const hash = user?.passwordHash || getDummyHash();
   const ok = hash ? await bcrypt.compare(password, hash) : false;
   if (!user || !user.active || !ok) {
+    await Activity.create({user:username.slice(0,64),actor:username.slice(0,64),action:'ورود ناموفق',target:'ورود به سامانه'});
     throw new AppError('نام کاربری یا رمز عبور نادرست است', 401);
   }
   await new Promise((resolve, reject) => {
@@ -149,11 +147,13 @@ api.post('/auth/login', loginLimit, wrap(async (req, res) => {
   await new Promise((resolve, reject) => {
     req.session.save((err) => (err ? reject(err) : resolve()));
   });
+  await unitAccess(user);req.user=user;await enter(req,user);
   await User.updateOne({ _id: user._id }, { lastLoginAt: new Date() });
   res.json({ user: publicUser(user) });
 }));
 
-api.post('/auth/logout', (req, res) => {
+api.post('/auth/logout', requireAuth, wrap(async (req, res) => {
+  await pulse(req,true);
   const cookie = req.session?.cookie;
   req.session.destroy(() => {
     res.clearCookie('arman.sid', {
@@ -164,8 +164,24 @@ api.post('/auth/logout', (req, res) => {
     });
     res.json({ ok: true });
   });
-});
+}));
 
+api.post('/view-event',requireAuth,wrap(async(req,res)=>{
+  const views={cd:['cont','قرارداد'],rd:['res','رزرونامه'],cv:['cust','مشتری'],ad:['acct','حساب مالی'],wd:['inbox','ارجاع'],ld:['legal','پرونده حقوقی']};
+  const choice=views[req.body?.view],id=String(req.body?.id||'');
+  if(!Array.isArray(choice)||!hasPerm(req.user,choice[0])||!/^[a-z0-9]{4,32}$/i.test(id))throw new AppError('پرونده نامعتبر',403);
+  await Activity.create({user:req.user.username,actor:req.user.name,action:'باز کردن '+choice[1],target:id});
+  res.sendStatus(204);
+}));
+api.post('/presence',requireAuth,wrap(async(req,res)=>{await pulse(req);res.sendStatus(204)}));
+api.get('/admin/activity',requireAuth,requirePerm('admin'),wrap(async(req,res)=>{
+  const filter=req.query.user?{user:String(req.query.user)}:{};
+  const cursor=req.query.before;
+  const sessionPage=Math.max(0,Math.min(100000,Number.parseInt(req.query.sessionPage)||0));
+  const events=await Activity.find({...filter,...(mongoose.isValidObjectId(cursor)?{_id:{$lt:cursor}}:{})}).sort({_id:-1}).limit(51).lean();
+  const sessions=await Visit.find(filter,{_id:0}).sort({last:-1}).skip(sessionPage*30).limit(31).lean();
+  res.json({events:events.slice(0,50),more:events.length>50,sessions:sessions.slice(0,30),moreSessions:sessions.length>30,now:new Date()});
+}));
 api.get('/auth/me', requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
@@ -181,96 +197,16 @@ api.post('/auth/password', requireAuth, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+mountFiles(api,requireAuth,wrap);
+api.get('/contract-history/:id',requireAuth,requirePerm('cont'),wrap(async(req,res)=>{
+  const before=Number(req.query.before)||Number.MAX_SAFE_INTEGER;
+  res.json(await ContractEvent.find({contract:req.params.id,version:{$lt:before}}).sort({version:-1}).limit(30).lean());
+}));
 api.get('/state', requireAuth, wrap(async (req, res) => {
-  if (!hasPerm(req.user, 'dash') && !hasPerm(req.user, 'write') && !hasPerm(req.user, 'legal')
-    && !hasPerm(req.user, 'acct') && !hasPerm(req.user, 'admin') && !hasPerm(req.user, 'inbox')) {
-    throw new AppError('به سامانه دسترسی ندارید', 403);
-  }
   const state = await loadState();
   const settings = await getAdminSettings();
   state.data.cfg = { ...state.data.cfg, legalDays: settings.legalDays, autoLegal: settings.autoLegal };
-  res.json(state);
-}));
-
-api.get('/attachments/options', requireAuth, (req, res) => {
-  res.json(attachmentOptions());
-});
-
-api.get('/attachments', requireAuth, wrap(async (req, res) => {
-  if (!hasPerm(req.user, 'cust') && !hasPerm(req.user, 'cont') && !hasPerm(req.user, 'write')
-    && !hasPerm(req.user, 'admin') && !hasPerm(req.user, 'legal') && !hasPerm(req.user, 'dash')) {
-    throw new AppError('به اسناد دسترسی ندارید', 403);
-  }
-  res.json({
-    items: await listAttachments({
-      custId: req.query.custId,
-      contractId: req.query.contractId,
-    }),
-  });
-}));
-
-api.post('/attachments', requireAuth, (req, res, next) => {
-  upload.single('file')(req, res, (err) => {
-    if (err) {
-      if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
-        return next(new AppError('حجم فایل حداکثر ۵ مگابایت است', 400));
-      }
-      return next(err);
-    }
-    return next();
-  });
-}, wrap(async (req, res) => {
-  if (!hasPerm(req.user, 'write') && !hasPerm(req.user, 'admin')) {
-    throw new AppError('اجازه بارگذاری سند ندارید', 403);
-  }
-  const item = await createAttachment({
-    file: req.file,
-    custId: req.body?.custId,
-    contractId: req.body?.contractId,
-    kind: req.body?.kind,
-    title: req.body?.title,
-  }, req.user);
-  res.status(201).json(item);
-}));
-
-api.patch('/attachments/:id', requireAuth, wrap(async (req, res) => {
-  if (!hasPerm(req.user, 'write') && !hasPerm(req.user, 'admin')) {
-    throw new AppError('اجازه ویرایش سند ندارید', 403);
-  }
-  res.json(await updateAttachment(req.params.id, req.body || {}, req.user));
-}));
-
-api.get('/attachments/:id/file', requireAuth, wrap(async (req, res) => {
-  if (!hasPerm(req.user, 'cust') && !hasPerm(req.user, 'cont') && !hasPerm(req.user, 'write')
-    && !hasPerm(req.user, 'admin') && !hasPerm(req.user, 'legal') && !hasPerm(req.user, 'dash')) {
-    throw new AppError('به اسناد دسترسی ندارید', 403);
-  }
-  const { meta, stream, mime, originalName } = await getAttachmentFile(req.params.id);
-  res.setHeader('Content-Type', mime);
-  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(originalName || meta.id)}`);
-  res.setHeader('Cache-Control', 'private, max-age=3600');
-  stream.on('error', (err) => {
-    if (!res.headersSent) res.status(404).json({ message: 'فایل پیدا نشد' });
-    else res.destroy(err);
-  });
-  stream.pipe(res);
-}));
-
-api.delete('/attachments/:id', requireAuth, wrap(async (req, res) => {
-  if (!hasPerm(req.user, 'write') && !hasPerm(req.user, 'admin')) {
-    throw new AppError('اجازه حذف سند ندارید', 403);
-  }
-  res.json(await deleteAttachment(req.params.id));
-}));
-
-api.post('/attachments/purge', requireAuth, wrap(async (req, res) => {
-  if (!hasPerm(req.user, 'write') && !hasPerm(req.user, 'admin')) {
-    throw new AppError('اجازه حذف ندارید', 403);
-  }
-  res.json(await purgeAttachments({
-    customerIds: Array.isArray(req.body?.customerIds) ? req.body.customerIds : [],
-    contractIds: Array.isArray(req.body?.contractIds) ? req.body.contractIds : [],
-  }));
+  res.json({...state,data:scopedState(req.user,state.data)});
 }));
 
 api.put('/state', requireAuth, wrap(async (req, res) => {
@@ -369,6 +305,7 @@ api.post('/users', requireAuth, requirePerm('admin'), wrap(async (req, res) => {
       perms,
       unitIds,
       active,
+      jobTitle:String(req.body.jobTitle||'').slice(0,100),phone:String(req.body.phone||'').slice(0,40),
       passwordHash: await bcrypt.hash(password, 12),
     });
     await applyUserUnitMembership(user);
@@ -391,6 +328,8 @@ api.put('/users/:id', requireAuth, requirePerm('admin'), wrap(async (req, res) =
     const admins = await User.countDocuments({ role: 'admin' });
     if (admins <= 1) throw new AppError('نقش آخرین مدیر را نمی‌توان تغییر داد');
   }
+  if(req.body.jobTitle!==undefined)user.jobTitle=String(req.body.jobTitle).slice(0,100);
+  if(req.body.phone!==undefined)user.phone=String(req.body.phone).slice(0,40);
   user.name = name;
   user.role = role;
   user.perms = normalizePerms(role, req.body?.perms);
@@ -430,6 +369,11 @@ api.delete('/users/:id', requireAuth, requirePerm('admin'), wrap(async (req, res
   res.json({ ok: true });
 }));
 
+api.get('/referral-sources', requireAuth, wrap(async (req,res)=>{
+  if(!hasPerm(req.user,'dash'))throw new AppError('دسترسی به میز کار لازم است',403);
+  res.json(await LegalCase.distinct('sourceKey',{sourceKey:/^(inst:|res:|text:lead:)/}));
+}));
+
 api.get('/workcases', requireAuth, wrap(async (req, res) => {
   if (!canInbox(req.user)) throw new AppError('به صندوق ارجاعات دسترسی ندارید', 403);
   res.json({
@@ -462,6 +406,11 @@ api.get('/workcases/:id', requireAuth, wrap(async (req, res) => {
 api.post('/workcases', requireAuth, wrap(async (req, res) => {
   if (!canRefer(req.user)) throw new AppError('اجازه ارجاع ندارید', 403);
   res.status(201).json(await createWorkCase(req.body || {}, req.user));
+}));
+
+api.post('/workcases/:id/seen', requireAuth, wrap(async (req,res)=>{
+  if(!canInbox(req.user))throw new AppError('به صندوق ارجاعات دسترسی ندارید',403);
+  res.json(await seeWorkNotice(req.params.id,req.body?.key,req.user));
 }));
 
 api.patch('/workcases/:id/status', requireAuth, wrap(async (req, res) => {

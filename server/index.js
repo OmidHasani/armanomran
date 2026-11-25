@@ -46,6 +46,8 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 app.use(compression());
+app.get('/vendor/jszip.js', (_req,res)=>res.sendFile(path.join(__dirname,'../node_modules/jszip/dist/jszip.min.js')));
+app.get('/vendor/docx.js', (_req,res)=>res.sendFile(path.join(__dirname,'../node_modules/docx-preview/dist/docx-preview.min.js')));
 app.use(express.json({ limit: '2mb' }));
 app.use(session({
   name: 'arman.sid',

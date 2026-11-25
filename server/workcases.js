@@ -1,3 +1,4 @@
+import {received,outstanding} from './receipts.js';
 import { Check, Contract, Customer, Ledger, LegalCase, Meta, Project, Reservation, User } from './models.js';
 import { hasPerm, normalizeUnitIds } from './perms.js';
 import { ensureLegalUnit, getUnitByCode, getUnitById, listUnits } from './units.js';
@@ -11,6 +12,8 @@ export const FOLLOW_ACTIONS = [
   { k: 'visit', l: 'مراجعه حضوری' },
   { k: 'meeting', l: 'جلسه توافق' },
   { k: 'court', l: 'اقدام قضایی' },
+  { k: 'petition', l: 'ثبت دادخواست' },{ k:'hearing',l:'جلسه رسیدگی' },
+  { k: 'review', l: 'بررسی قرارداد' },{ k:'enforcement',l:'پیگیری اجرای حکم' },
   { k: 'other', l: 'سایر' },
 ];
 
@@ -131,16 +134,16 @@ function followsFromTimeline(timeline = []) {
 
 export function serializeCase(doc) {
   const {
-    _id, createdAt, updatedAt, closedAt, referredAt, follows = [], timeline = [], ...rest
+    _id, seenNotices, createdAt, updatedAt, closedAt, referredAt, follows = [], timeline = [], ...rest
   } = doc;
   const tl = Array.isArray(timeline) && timeline.length
-    ? [...timeline].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    ? [...timeline].sort((a, b) => new Date(b.createdAt||0)-new Date(a.createdAt||0))
     : [];
   const legacyFollows = Array.isArray(follows) && follows.length ? follows : followsFromTimeline(tl);
   return {
     id: String(_id),
     ...rest,
-    follows: [...legacyFollows].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
+    follows: [...legacyFollows].sort((a, b) => new Date(b.createdAt||0)-new Date(a.createdAt||0)),
     timeline: tl,
     referredAt: referredAt || null,
     createdAt: createdAt || null,
@@ -164,6 +167,8 @@ export function canAccessCase(user, item, legalId = '') {
   const uidStr = String(user._id);
   if (item.assignedTo && String(item.assignedTo) === uidStr) return true;
   if (item.referredById && String(item.referredById) === uidStr) return true;
+  if(item.audience?.length)return item.audience.includes(uidStr)&&normalizeUnitIds(user.unitIds).includes(String(item.currentUnitId));
+  if(item.assignedTo)return false;
   const units = new Set(normalizeUnitIds(user.unitIds));
   if (item.currentUnitId && units.has(String(item.currentUnitId))) return true;
   if (hasPerm(user, 'legal') && legalId && String(item.currentUnitId) === String(legalId)) return true;
@@ -183,10 +188,10 @@ async function accessFilter(user) {
     { assignedTo: uidStr },
     { referredById: uidStr },
   ];
-  if (units.length) or.push({ currentUnitId: { $in: units } });
+  if(units.length)or.push({currentUnitId:{$in:units},audience:uidStr},{currentUnitId:{$in:units},'audience.0':{$exists:false},assignedTo:{$in:['',null]}});
   if (hasPerm(user, 'legal')) {
     const lid = await legalUnitId();
-    or.push({ currentUnitId: lid });
+    or.push({ currentUnitId: lid,'audience.0':{$exists:false},assignedTo:{$in:['',null]} });
   }
   if (!or.length) return { _id: '__none__' };
   return { $or: or };
@@ -277,6 +282,13 @@ async function resolveUnit(unitId, unitCode) {
   return ensureLegalUnit();
 }
 
+async function recipients(unit,body){
+  if(body?.delivery!=='members')return undefined;
+  if(body.assignedTo)throw new AppError('فقط یک نوع گیرنده انتخاب کنید');
+  const members=await User.find({active:true,unitIds:unit.id}).select('_id').lean();
+  if(!members.length)throw new AppError('واحد مقصد عضو فعال ندارد');
+  return members.map(m=>String(m._id));
+}
 async function resolveAssignee(unit, assignedTo) {
   if (!assignedTo) return { assignedTo: '', assignedName: '' };
   const id = String(assignedTo);
@@ -292,7 +304,30 @@ async function resolveAssignee(unit, assignedTo) {
 }
 
 function paidSum(contract) {
-  return (contract.inst || []).filter((i) => i.paid).reduce((s, i) => s + (i.amt || 0), 0);
+  return (contract.inst || []).reduce((s,i)=>s+received(i),0);
+}
+
+function personalNotices(c,user,seen=[]){
+  const id=String(user._id),events=c.timeline||[];
+  const routing=events.find(e=>['assign','transfer','create'].includes(e.type));
+  const routeIndex=routing?events.indexOf(routing):events.length;
+  const ownFollow=events.slice(0,routeIndex).some(e=>e.type==='follow'&&e.byId===id);
+  const follow=events.find(e=>e.type==='follow'&&e.byId!==id)||(c.follows||[]).find(e=>e.byId!==id);
+  const result=[];
+  function add(kind,event){
+    const key=kind+'-'+(event?.id||c.id);
+    if(!seen.includes(id+':'+key))result.push({kind,key,at:event?.createdAt||c.referredAt,by:event?.by||c.referredBy});
+  }
+  if(c.status!=='done'&&!ownFollow&&(String(c.assignedTo||'')===id||c.audience?.includes(id)))add('incoming',routing);
+  if(String(c.referredById||'')===id&&follow)add('response',follow);
+  return result;
+}
+
+export async function seeWorkNotice(id,key,user){
+  const c=await getWorkCase(id,user);
+  if(typeof key!=='string'||!personalNotices(c,user).some(n=>n.key===key))throw new AppError('اطلاعات ارجاع تغییر کرده است. صندوق را تازه‌سازی کنید.',409);
+  await LegalCase.updateOne({_id:id},{$addToSet:{seenNotices:String(user._id)+':'+key}});
+  return {ok:true};
 }
 
 export async function listWorkCases(user, query = {}) {
@@ -315,8 +350,8 @@ export async function listWorkCases(user, query = {}) {
   if (query.mine === '1' || query.mine === 'true') {
     filter.assignedTo = String(user._id);
   }
-  const cases = await LegalCase.find(filter).sort({ priority: -1, overdueDays: -1, referredAt: -1 }).lean();
-  return cases.map(serializeCase);
+  const cases = await LegalCase.find(filter).select('+seenNotices').sort({ priority: -1, overdueDays: -1, referredAt: -1 }).lean();
+  return cases.map(doc=>{const c=serializeCase(doc);return {...c,notices:personalNotices(c,user,doc.seenNotices)}});
 }
 
 export async function getWorkCase(id, user) {
@@ -351,6 +386,8 @@ export async function createWorkCase(body, user) {
   if (!['installment', 'reservation', 'contract', 'payment', 'report', 'text'].includes(kind)) {
     throw new AppError('نوع ارجاع نامعتبر است');
   }
+  const linked=body?.instId||body?.contractId||kind==='contract'||kind==='installment'?'cont':body?.reservationId||kind==='reservation'?'res':body?.ledgerId||body?.checkId||kind==='payment'?'acct':'';
+  if(linked&&!hasPerm(user,linked)&&!hasPerm(user,'admin'))throw new AppError('به پرونده مبدأ دسترسی ندارید',403);
   const unit = await resolveUnit(body?.unitId, body?.unitCode);
   if (!unit.active) throw new AppError('این واحد غیرفعال است');
   const assignee = await resolveAssignee(unit, body?.assignedTo);
@@ -410,7 +447,7 @@ export async function createWorkCase(body, user) {
       id: inst.id, title: inst.title || '', amt: inst.amt || 0, date: inst.date, ref: inst.ref || '', paid: false,
     };
     chart = {
-      due: inst.amt || 0, paid, remaining: Math.max(0, c.total - paid), contractTotal: c.total, overdueAmt: inst.amt || 0,
+      due: outstanding(inst), paid, remaining: Math.max(0, c.total - paid), contractTotal: c.total, overdueAmt: outstanding(inst),
     };
     finalKind = 'installment';
     finalTitle = finalTitle || `قسط معوق ${c.no} – ${inst.title || ''}`.trim();
@@ -528,7 +565,7 @@ export async function createWorkCase(body, user) {
     doc = await LegalCase.create({
       _id: id,
       sourceKey,
-      kind: finalKind,
+      audience:await recipients(unit,body),kind: finalKind,
       title: finalTitle,
       body: bodyText,
       status: 'new',
@@ -581,9 +618,10 @@ export async function updateWorkStatus(id, status, user) {
     item.assignedTo = actorId(user);
     item.assignedName = actorName(user);
   }
+  const stName = (k) => (CASE_STATUS.find((s) => s.k === k) || { l: k }).l;
   item.timeline = item.timeline || [];
   item.timeline.push(makeTimelineEvent('status', user, {
-    note: `تغییر وضعیت از ${prev} به ${status}`,
+    note: `تغییر وضعیت از «${stName(prev)}» به «${stName(status)}»`,
     status,
   }));
   await item.save();
@@ -641,7 +679,7 @@ export async function transferWorkCase(id, body, user) {
   if (!canAccessCase(user, item, lid)) throw new AppError('به این ارجاع دسترسی ندارید', 403);
   const unit = await resolveUnit(body?.unitId, body?.unitCode);
   if (!unit.active) throw new AppError('این واحد غیرفعال است');
-  if (String(unit.id) === String(item.currentUnitId) && !body?.assignedTo) {
+  if (String(unit.id) === String(item.currentUnitId) && !body?.assignedTo && !body?.delivery && !item.assignedTo && !item.audience?.length) {
     throw new AppError('واحد مقصد با واحد فعلی یکی است');
   }
   const assignee = await resolveAssignee(unit, body?.assignedTo);
@@ -658,6 +696,7 @@ export async function transferWorkCase(id, body, user) {
     toUserId: assignee.assignedTo,
     toUserName: assignee.assignedName,
   }));
+  item.audience=await recipients(unit,body);
   item.currentUnitId = unit.id;
   item.currentUnitName = unit.name;
   if (assignee.assignedTo) {
@@ -683,6 +722,7 @@ export async function assignWorkCase(id, body, user) {
     ? await getUnitById(item.currentUnitId)
     : await ensureLegalUnit();
   const assignee = await resolveAssignee(unit, body?.assignedTo);
+  item.audience=undefined;
   if (!assignee.assignedTo) throw new AppError('مسئول را انتخاب کنید');
   item.timeline = item.timeline || [];
   item.timeline.push(makeTimelineEvent('assign', user, {

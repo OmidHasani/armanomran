@@ -89,13 +89,13 @@
       .sort((a, b) => (a.name < b.name ? -1 : 1))
       .map((p) => {
         const tag = p.custId ? 'مشتری CRM' : partyKindLabel(p.kind);
-        return [p.id, `${p.name} – ${tag}${p.nid ? ' · ' + p.nid : ''}${p.phone ? ' · ' + p.phone : ''}`];
+        return [p.id, `${p.name} – ${tag}${p.nid ? ' — ' + p.nid : ''}${p.phone ? ' — ' + p.phone : ''}`];
       });
     const fromCust = (S.customers || [])
       .filter((c) => !linked.has(c.id))
       .slice()
       .sort((a, b) => (a.name < b.name ? -1 : 1))
-      .map((c) => [`cust:${c.id}`, `${c.name} – مشتری CRM (جدید)${c.nid ? ' · ' + c.nid : ''}${c.phone ? ' · ' + c.phone : ''}`]);
+      .map((c) => [`cust:${c.id}`, `${c.name} – مشتری CRM (جدید)${c.nid ? ' — ' + c.nid : ''}${c.phone ? ' — ' + c.phone : ''}`]);
     return fromParties.concat(fromCust);
   }
 
@@ -132,8 +132,8 @@
   function balLabel(bal) {
     if (!bal) return 'تسویه';
     return bal > 0
-      ? `شخص به شرکت بدهکار · ${money(bal)} تومان`
-      : `شرکت به شخص بدهکار · ${money(-bal)} تومان`;
+      ? `شخص به شرکت بدهکار — ${money(bal)} تومان`
+      : `شرکت به شخص بدهکار — ${money(-bal)} تومان`;
   }
 
   function balShort(bal) {
@@ -272,7 +272,7 @@
     else if (ch.serial) parts.push(`سریال ${ch.serial}`);
     if (ch.dueDate) parts.push(`سررسید ${ch.dueDate}`);
     if (ch.desc) parts.push(ch.desc);
-    return parts.join(' · ');
+    return parts.join(' — ');
   }
 
   function syncCheckLedger(ch) {
@@ -396,10 +396,10 @@
     ${sb()}
     <div class=cards>${list.map((p) => {
       const b = partyBalance(p.id);
-      const custTag = p.custId ? ' · لینک CRM' : '';
+      const custTag = p.custId ? ' — لینک CRM' : '';
       return `<div class=card data-s="${esc(N(p.name + (p.title || '') + (p.phone || '') + (p.nid || '') + partyKindLabel(p.kind)))}" onclick="go('ad','${p.id}')">
         <b>${esc(p.name)}</b>
-        <small>${esc(partyKindLabel(p.kind))}${custTag}${p.title ? ' · ' + esc(p.title) : ''}${p.phone ? ' · ' + F(p.phone) : ''}</small>
+        <small>${esc(partyKindLabel(p.kind))}${custTag}${p.title ? ' — ' + esc(p.title) : ''}${p.phone ? ' — ' + F(p.phone) : ''}</small>
         <div class=meta>
           <span>دریافتی ${money(b.debit)}</span>
           <span>پرداختی ${money(b.credit)}</span>
@@ -410,7 +410,7 @@
     ${orphans.length ? `<h3 style="margin-top:18px">مشتریان CRM بدون پرونده حسابداری <span class=count>${F(orphans.length)}</span></h3>
     <div class=cards>${orphans.map((c) => `<div class=card data-s="${esc(N(c.name + c.nid + c.phone))}" onclick="openAcctForCustomer('${c.id}')">
       <b>${esc(c.name)}</b>
-      <small>مشتری CRM · ${F(c.nid || '—')} · ${F(c.phone || '—')}</small>
+      <small>مشتری CRM — ${F(c.nid || '—')} — ${F(c.phone || '—')}</small>
       <div class=meta><span>برای باز کردن حسابداری کلیک کنید</span></div>
     </div>`).join('')}</div>` : ''}`;
   }
@@ -859,7 +859,7 @@
       <div>
         <div class=dossier-k>پرونده حسابداری</div>
         <div class=title-row><h2>${esc(p.name)}</h2><span class="chip">${esc(partyKindLabel(p.kind))}</span></div>
-        <p class=dossier-addr>${p.title ? esc(p.title) + ' · ' : ''}${p.phone ? '☎ ' + F(p.phone) : '—'}${p.nid ? ' · کد ملی ' + F(p.nid) : ''}</p>
+        <p class=dossier-addr>${p.title ? esc(p.title) + ' — ' : ''}${p.phone ? '☎ ' + F(p.phone) : '—'}${p.nid ? ' — کد ملی ' + F(p.nid) : ''}</p>
         ${p.note ? `<p class=dossier-note>${esc(p.note)}</p>` : ''}
         ${p.custId ? `<p class=fd><button class="sm btn-soft" onclick="go('cv','${p.custId}')">پرونده مشتری لینک‌شده</button></p>` : ''}
       </div>
@@ -949,8 +949,8 @@
     </tr>`;
     }).join('');
     return `<div class="acct-party-block">
-      <h5 style="margin:18px 0 8px">${esc(p.name)} <span style="font-weight:400;font-size:12px">· ${esc(partyKindLabel(p.kind))}${p.title ? ' · ' + esc(p.title) : ''}</span></h5>
-      <p class=fd style="margin:0 0 8px">ابتدای بازه: <b>${esc(balShort(rep.open))}</b> · پایان بازه: <b>${esc(balShort(rep.bal))}</b> · دریافتی بازه: ${money(rep.debit)} · پرداختی بازه: ${money(rep.credit)}</p>
+      <h5 style="margin:18px 0 8px">${esc(p.name)} <span style="font-weight:400;font-size:12px">— ${esc(partyKindLabel(p.kind))}${p.title ? ' — ' + esc(p.title) : ''}</span></h5>
+      <p class=fd style="margin:0 0 8px">ابتدای بازه: <b>${esc(balShort(rep.open))}</b> — پایان بازه: <b>${esc(balShort(rep.bal))}</b> — دریافتی بازه: ${money(rep.debit)} — پرداختی بازه: ${money(rep.credit)}</p>
       ${tbl(['ردیف', 'تاریخ', 'نوع', 'مبلغ', 'شرح', 'بدهکار', 'بستانکار', 'پیگیری', 'ثبت‌کننده'], rows || '<tr><td colspan="9">تراکنشی در این بازه نیست</td></tr>')}
     </div>`;
   }
@@ -1029,7 +1029,7 @@
     return `<div class="paper acct-paper">
       <div class=hd><span>${esc(COMPANY)}</span><span>تاریخ چاپ: ${F(todayJ())}</span></div>
       <h4>گزارش چک‌ها</h4>
-      <p>بازه: <b>${esc(rep.bounds.label)}</b>${CHECK_FILTER !== 'all' ? ` · فقط چک‌های ${CHECK_FILTER === 'in' ? 'دریافتی' : 'پرداختی'}` : ''}</p>
+      <p>بازه: <b>${esc(rep.bounds.label)}</b>${CHECK_FILTER !== 'all' ? ` — فقط چک‌های ${CHECK_FILTER === 'in' ? 'دریافتی' : 'پرداختی'}` : ''}</p>
       ${tbl(['ردیف', 'نوع', 'طرف حساب', 'مبلغ', 'ثبت', 'تاریخ چک', 'سررسید', 'بانک', 'صیاد/سریال', 'وضعیت', 'شرح'], rows || '<tr><td colspan="11">چکی در این بازه نیست</td></tr>')}
       <div class=acct-sum>
         <p>جمع چک‌های دریافتی: <b>${T(rep.debit)}</b></p>

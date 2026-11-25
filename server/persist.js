@@ -1,3 +1,7 @@
+import {Activity} from './activity.js';
+import {changes,mergeState} from './state-access.js';
+import {DossierFile} from './files.js';
+import {recordFinancialChanges} from './contract-history.js';
 import mongoose from 'mongoose';
 import { Check, Contract, Customer, Lead, Ledger, Meta, Party, Project, Reservation } from './models.js';
 import { AppError, trailingNumber, validateState } from './validate.js';
@@ -39,6 +43,7 @@ async function replaceAll(Model, docs, session) {
 function projectDoc(project) {
   return {
     _id: project.id,
+      accountId: project.accountId,
     name: project.name,
     addr: project.addr || '',
     note: project.note || '',
@@ -66,15 +71,6 @@ function projectDoc(project) {
       storageArea: Number(unit.storageArea) || 0,
       handReady: !!unit.handReady,
       handDate: unit.handDate || '',
-      dangSplit: !!unit.dangSplit,
-      owners: !!unit.dangSplit
-        ? (Array.isArray(unit.owners) ? unit.owners : []).map((owner) => ({
-          id: owner.id,
-          custId: owner.custId,
-          dang: Number(owner.dang) || 0,
-          note: owner.note || '',
-        }))
-        : [],
     })),
   };
 }
@@ -97,6 +93,14 @@ function customerDoc(customer) {
 function contractDoc(contract) {
   const doc = {
     _id: contract.id,
+    sourceFields: contract.sourceFields,
+    owners: contract.owners,
+  installBudget:contract.installBudget,
+    reservationId: contract.reservationId,
+      transfers: contract.transfers,
+      rates: contract.rates,
+      depositLabel: contract.depositLabel,
+      accountId: contract.accountId,
     no: contract.no,
     type: contract.type,
     cust: contract.cust,
@@ -117,25 +121,13 @@ function contractDoc(contract) {
     inst: contract.inst.map((inst) => {
       const row = {
         id: inst.id,
+      parts: inst.parts,
         title: inst.title || '',
         amt: inst.amt,
         date: inst.date,
         paid: !!inst.paid,
         pdate: inst.pdate || '',
         ref: inst.ref || '',
-        fromPayId: inst.fromPayId || '',
-        payer: inst.payer || '',
-        acct: inst.acct || '',
-        pays: Array.isArray(inst.pays)
-          ? inst.pays.map((pay) => ({
-            id: pay.id,
-            amt: Number(pay.amt) || 0,
-            date: pay.date || '',
-            ref: pay.ref || '',
-            note: pay.note || '',
-            overFrom: pay.overFrom || '',
-          }))
-          : [],
         lateDays: Number(inst.lateDays) || 0,
         lateCalc: Number(inst.lateCalc) || 0,
         lateFee: Number(inst.lateFee) || 0,
@@ -149,8 +141,8 @@ function contractDoc(contract) {
     }),
     hand: contract.hand || '',
   };
-  if (contract.resId) doc.resId = contract.resId;
   if (typeof contract.auto === 'boolean') doc.auto = contract.auto;
+  if (contract.autoMode === 'off' || contract.autoMode === 'all' || contract.autoMode === 'year') doc.autoMode = contract.autoMode;
   if (contract.fac?.length) doc.fac = contract.fac;
   if (contract.doc && typeof contract.doc === 'object') {
     doc.doc = {
@@ -198,10 +190,12 @@ function contractDoc(contract) {
 function reservationDoc(reservation) {
   const doc = {
     _id: reservation.id,
+    sourceFields: reservation.sourceFields,
     no: reservation.no,
     cust: reservation.cust,
     proj: reservation.proj,
     unit: reservation.unit,
+    plannedCash:reservation.plannedCash,plannedInstallments:reservation.plannedInstallments,
     need: reservation.need,
     fine: reservation.fine,
     deadline: reservation.deadline,
@@ -313,6 +307,15 @@ function checkDoc(ch) {
 }
 
 export async function loadState() {
+  for(let attempt=0;attempt<4;attempt++){
+    const start=await Meta.findById('crm').select('version').lean();
+    const state=await readCollections();
+    const end=await Meta.findById('crm').select('version').lean();
+    if((start?.version||0)===state.version&&state.version===(end?.version||0))return state;
+  }
+  throw new AppError('اطلاعات در حال تغییر است؛ دوباره تلاش کنید',409);
+}
+async function readCollections() {
   const [projects, customers, contracts, reservations, leads, parties, ledger, checks, meta] = await Promise.all([
     Project.find().sort({ createdAt: 1 }).lean(),
     Customer.find().sort({ createdAt: 1 }).lean(),
@@ -336,6 +339,8 @@ export async function loadState() {
       ledger: ledger.map(toClient),
       checks: checks.map(toClient),
       cfg: {
+        drafts: meta?.drafts || [],
+        accounts: meta?.accounts || [],
         fine: meta?.fine ?? DEFAULT_FINE,
         days: meta?.days ?? DEFAULT_DAYS,
         legalDays: meta?.legalDays ?? 7,
@@ -349,8 +354,10 @@ export async function loadState() {
   };
 }
 
-export async function saveState(user, version, raw) {
-  const data = validateState(raw);
+export async function saveState(user, version, raw, afterPersist) {
+  const prior=await loadState();
+  if(prior.version!==version){const err=new AppError('نسخه داده تغییر کرده است. صفحه را تازه‌سازی کنید.',409);err.version=prior.version;throw err}
+  const data = validateState(mergeState(user,raw,prior.data));
   const cn = Math.max(data.cn || 0, maxTrailing(data.contracts, (contract) => contract.no), 1000);
   const rn = Math.max(data.rn || 0, maxTrailing(data.reservations, (reservation) => reservation.no), 1000);
   const pn = Math.max(
@@ -369,8 +376,13 @@ export async function saveState(user, version, raw) {
         error.version = current;
         throw error;
       }
+      const events=changes(prior.data,data,user);
+      if(events.length)await Activity.insertMany(events,{session});
       await replaceAll(Project, data.projects.map(projectDoc), session);
+      await DossierFile.deleteMany({kind:'customer',parent:{$nin:data.customers.map(x=>x.id)}}).session(session);
+      await DossierFile.deleteMany({kind:'contract',parent:{$nin:data.contracts.map(x=>x.id)}}).session(session);
       await replaceAll(Customer, data.customers.map(customerDoc), session);
+      await recordFinancialChanges(data.contracts,session,user,current+1);
       await replaceAll(Contract, data.contracts.map(contractDoc), session);
       await replaceAll(Reservation, data.reservations.map(reservationDoc), session);
       await replaceAll(Lead, data.leads.map(leadDoc), session);
@@ -384,6 +396,8 @@ export async function saveState(user, version, raw) {
         {
           $set: {
             version: nextVersion,
+            drafts: data.cfg.drafts ?? meta?.drafts ?? [],
+            accounts: data.cfg.accounts ?? meta?.accounts ?? [],
             fine: data.cfg?.fine > 0 ? data.cfg.fine : (meta?.fine ?? DEFAULT_FINE),
             days: data.cfg?.days > 0 ? data.cfg.days : (meta?.days ?? DEFAULT_DAYS),
             me: data.me || '',
@@ -397,6 +411,7 @@ export async function saveState(user, version, raw) {
         },
         { upsert: true, session },
       );
+      if(afterPersist)await afterPersist(session);
       result = { version: nextVersion, pn, cn, rn };
     });
   } catch (err) {

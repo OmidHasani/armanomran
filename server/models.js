@@ -23,19 +23,10 @@ const unitSchema = new Schema({
   storageArea: { type: Number, default: 0 },
   handReady: { type: Boolean, default: false },
   handDate: { type: String, default: '' },
-  dangSplit: { type: Boolean, default: false },
-  owners: {
-    type: [{
-      id: { type: String, required: true },
-      custId: { type: String, required: true },
-      dang: { type: Number, required: true },
-      note: { type: String, default: '' },
-    }],
-    default: [],
-  },
 }, { _id: false });
 
 const projectSchema = new Schema({
+  accountId: Schema.Types.Mixed,
   _id: String,
   name: { type: String, required: true },
   addr: { type: String, default: '' },
@@ -70,16 +61,8 @@ const customerSchema = new Schema({
 customerSchema.index({ nid: 1 }, { unique: true });
 customerSchema.index({ phone: 1 });
 
-const instPaySchema = new Schema({
-  id: { type: String, required: true },
-  amt: { type: Number, required: true },
-  date: { type: String, required: true },
-  ref: { type: String, default: '' },
-  note: { type: String, default: '' },
-  overFrom: { type: String, default: '' },
-}, { _id: false });
-
 const instSchema = new Schema({
+  parts: Schema.Types.Mixed,
   id: { type: String, required: true },
   title: { type: String, default: '' },
   amt: { type: Number, required: true },
@@ -88,10 +71,6 @@ const instSchema = new Schema({
   pdate: { type: String, default: '' },
   ref: { type: String, default: '' },
   kind: { type: String, default: '' },
-  fromPayId: { type: String, default: '' },
-  payer: { type: String, default: '' },
-  acct: { type: String, default: '' },
-  pays: { type: [instPaySchema], default: [] },
   latePctDaily: { type: Number, default: undefined },
   lateDays: { type: Number, default: 0 },
   lateCalc: { type: Number, default: 0 },
@@ -144,6 +123,14 @@ const contractDocSchema = new Schema({
 }, { _id: false });
 
 const contractSchema = new Schema({
+  sourceFields: Schema.Types.Mixed,
+  installBudget:Number,
+  owners: {type:[new Schema({customer:String,share:Number},{_id:false})],default:undefined},
+  reservationId: String,
+  transfers: Schema.Types.Mixed,
+  rates: Schema.Types.Mixed,
+  depositLabel: Schema.Types.Mixed,
+  accountId: Schema.Types.Mixed,
   _id: String,
   no: { type: String, required: true },
   type: { type: String, enum: ['lease', 'partner', 'invest'], required: true },
@@ -163,7 +150,7 @@ const contractSchema = new Schema({
   note: { type: String, default: '' },
   latePctDaily: { type: Number, default: 0 },
   auto: Boolean,
-  resId: { type: String, default: '' },
+  autoMode: { type: String, enum: ['off', 'all', 'year'] },
   inst: { type: [instSchema], default: [] },
   fac: { type: [facSchema], default: undefined },
   hand: { type: String, default: '' },
@@ -175,7 +162,6 @@ const contractSchema = new Schema({
 contractSchema.index({ no: 1 }, { unique: true });
 contractSchema.index({ cust: 1 });
 contractSchema.index({ proj: 1, unit: 1 });
-contractSchema.index({ resId: 1 });
 
 const paySchema = new Schema({
   id: { type: String, required: true },
@@ -198,6 +184,8 @@ const logSchema = new Schema({
 }, { _id: false });
 
 const reservationSchema = new Schema({
+  sourceFields: Schema.Types.Mixed,
+  plannedCash:Number,plannedInstallments:Number,
   _id: String,
   no: { type: String, required: true },
   cust: { type: String, required: true },
@@ -261,6 +249,8 @@ leadSchema.index({ stage: 1 });
 leadSchema.index({ rep: 1 });
 
 const metaSchema = new Schema({
+  drafts: Schema.Types.Mixed,
+  accounts: Schema.Types.Mixed,
   _id: { type: String, default: 'crm' },
   version: { type: Number, default: 0 },
   fine: { type: Number, default: 30000000 },
@@ -284,12 +274,13 @@ const userSchema = new Schema({
   perms: { type: [String], default: [] },
   unitIds: { type: [String], default: [] },
   active: { type: Boolean, default: true },
-  lastLoginAt: Date,
+  jobTitle:String,phone:String,lastLoginAt: Date,
 }, { timestamps: true, versionKey: false });
 userSchema.index({ unitIds: 1 });
 userSchema.index({ role: 1, active: 1 });
 
 const orgUnitSchema = new Schema({
+  perms:{type:[String],default:[]},
   _id: String,
   name: { type: String, required: true },
   code: { type: String, required: true, unique: true, lowercase: true, trim: true },
@@ -345,6 +336,8 @@ const followSchema = new Schema({
 }, { _id: false });
 
 const legalCaseSchema = new Schema({
+  seenNotices: {type:[String],default:undefined,select:false},
+  audience:{type:[String],default:undefined},
   _id: String,
   sourceKey: { type: String, required: true, unique: true },
   kind: {

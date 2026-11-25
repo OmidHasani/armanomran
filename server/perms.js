@@ -34,9 +34,7 @@ export function normalizePerms(role, perms) {
   if (r === 'admin') return [...ROLE_DEFAULTS.admin];
   const allowed = new Set(PERM_DEFS.map((p) => p.k));
   const list = Array.isArray(perms) ? perms.filter((p) => allowed.has(p)) : [];
-  if (!list.length) return [...(ROLE_DEFAULTS[r] || ROLE_DEFAULTS.staff)];
-  if (r === 'legal' && !list.includes('legal')) list.push('legal');
-  if (r === 'legal' && !list.includes('inbox')) list.push('inbox');
+  if (!Array.isArray(perms)) return [...(ROLE_DEFAULTS[r] || ROLE_DEFAULTS.staff)];
   return [...new Set(list)];
 }
 
@@ -49,7 +47,7 @@ export function hasPerm(user, key) {
   if (!user) return false;
   if (user.role === 'admin') return true;
   const perms = Array.isArray(user.perms) ? user.perms : normalizePerms(user.role, user.perms);
-  return perms.includes(key);
+  return perms.includes(key)||!!user.$locals?.unitPerms?.includes(key);
 }
 
 export function publicUser(user) {
@@ -61,7 +59,7 @@ export function publicUser(user) {
     name: user.name,
     role,
     roleLabel: ROLES[role],
-    perms,
+    jobTitle:user.jobTitle||'',phone:user.phone||'',perms:[...new Set([...perms,...(user.$locals?.unitPerms||[])])],
     unitIds: normalizeUnitIds(user.unitIds),
     active: user.active !== false,
   };

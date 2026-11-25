@@ -1,11 +1,11 @@
 /* قالب رسمی رزرونامه – یک برگه A4 – وابسته به app.js و legal-ui.js */
 (function () {
   const PAY_DEFAULTS = {
-    payBank: 'مسکن',
-    payCard: '6280231545915190',
-    paySheba: '930140040000013010694761',
-    payAcct: '13010694761',
-    payName: 'فریده بهزادی',
+    payBank: '',
+    payCard: '',
+    paySheba: '',
+    payAcct: '',
+    payName: '',
     supportPhone: '09133206625',
     refundMonths: 3,
   };
@@ -34,23 +34,23 @@
     const d = r.doc || {};
     const sched = Array.isArray(d.schedule) ? d.schedule : [];
     return {
-      title: d.title || 'خانم',
+      title: d.title || '',
       total: d.total != null && d.total !== '' ? Number(d.total) : (Number(u.total) || Number(u.totalRaw) || Number(r.need) || 0),
       loc: d.loc || [p.name, p.addr].filter(Boolean).join(' - ') || '',
       floor: d.floor || u.floor || '',
       unitNo: d.unitNo || u.no || '',
       fromBank: d.fromBank || '',
-      supportPhone: d.supportPhone ?? (r.doc ? '' : PAY_DEFAULTS.supportPhone),
-      refundMonths: d.refundMonths != null && d.refundMonths !== '' ? Number(d.refundMonths) : (r.doc ? Number(d.refundMonths) || 0 : PAY_DEFAULTS.refundMonths),
+      supportPhone: d.supportPhone || PAY_DEFAULTS.supportPhone,
+      refundMonths: d.refundMonths != null && d.refundMonths !== '' ? Number(d.refundMonths) : PAY_DEFAULTS.refundMonths,
       schedule: [0, 1, 2, 3].map((i) => ({
         amt: sched[i]?.amt != null && sched[i]?.amt !== '' ? Number(sched[i].amt) : 0,
         date: sched[i]?.date || '',
       })),
-      payBank: d.payBank ?? (r.doc ? '' : PAY_DEFAULTS.payBank),
-      payCard: d.payCard ?? (r.doc ? '' : PAY_DEFAULTS.payCard),
-      paySheba: d.paySheba ?? (r.doc ? '' : PAY_DEFAULTS.paySheba),
-      payAcct: d.payAcct ?? (r.doc ? '' : PAY_DEFAULTS.payAcct),
-      payName: d.payName ?? (r.doc ? '' : PAY_DEFAULTS.payName),
+      payBank: d.payBank || PAY_DEFAULTS.payBank,
+      payCard: d.payCard || PAY_DEFAULTS.payCard,
+      paySheba: d.paySheba || PAY_DEFAULTS.paySheba,
+      payAcct: d.payAcct || PAY_DEFAULTS.payAcct,
+      payName: d.payName || PAY_DEFAULTS.payName,
     };
   }
 
@@ -102,7 +102,7 @@
     const x = reserveDocDefaults(r, cu, p, u);
     const paidSumAmt = sum(r.pays || [], (pay) => pay.amt);
     const schedSum = sum(x.schedule || [], (s) => Number(s.amt) || 0);
-    const fine = Number(r.fine) || RF();
+    const fine = Number(r.fine ?? RF());
     const floorUnit = `طبقه ${fillOr(x.floor, '....')}– واحد ${fillOr(F(x.unitNo), '....')}`;
     const totalTxt = Number(x.total) > 0 ? WW(x.total) : dots(36);
     const who = `${esc(x.title)} ${esc(cu.name || dots(12))}`;
@@ -161,13 +161,13 @@ ${inlineSig()}
         <h4>۱. مشخصات در متن</h4>
         <div class=grid>
           <label>عنوان
-            <select name=title>
+            <select name=title><option value="">انتخاب عنوان</option>
               <option value="آقای">آقای</option>
               <option value="خانم">خانم</option>
               <option value="خانم / آقای">خانم / آقای</option>
             </select>
           </label>
-          <label>مبلغ کل واحد (تومان)<input name=total data-money inputmode=numeric></label>
+          <label>مبلغ کل واحد (تومان)<input name=total inputmode=numeric></label>
           <label>طبقه<input name=floor></label>
           <label>شماره واحد<input name=unitNo></label>
           <label class=w>نشانی در رزرونامه<textarea name=loc rows=2></textarea></label>
@@ -181,7 +181,7 @@ ${inlineSig()}
         <p class=fd>مانده نهایی تا مهلت رزرو خودکار از مبلغ کل منهای پرداخت‌ها و این اقساط حساب می‌شود.</p>
         <div class=grid>
           ${[0, 1, 2, 3].map((i) => `
-            <label>مبلغ قسط ${F(i + 1)}<input name=samt${i} data-money inputmode=numeric></label>
+            <label>مبلغ قسط ${F(i + 1)}<input name=samt${i} inputmode=numeric></label>
             <label>سررسید قسط ${F(i + 1)}<input name=sdate${i} readonly style="cursor:pointer" placeholder="انتخاب از تقویم"></label>
           `).join('')}
         </div>
@@ -211,14 +211,12 @@ ${inlineSig()}
     set('payAcct', init.payAcct); set('payName', init.payName);
     const totalEl = m.querySelector('[name=total]');
     totalEl.value = init.total ? money(init.total) : '';
-    totalEl.oninput = function () { fmtMoney(this); };
-    paintMoneyWords(totalEl);
+    totalEl.oninput = function () { fmtIn(this); };
     init.schedule.forEach((s, i) => {
       const a = m.querySelector(`[name=samt${i}]`);
       const d = m.querySelector(`[name=sdate${i}]`);
       a.value = s.amt ? money(s.amt) : '';
-      a.oninput = function () { fmtMoney(this); };
-      paintMoneyWords(a);
+      a.oninput = function () { fmtIn(this); };
       d.value = s.date ? F(s.date) : '';
       bindDate(d);
     });
