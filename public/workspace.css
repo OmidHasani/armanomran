@@ -389,7 +389,13 @@ main .pd{width:100%;max-width:none}.pd-bar-actions button{white-space:normal}
 .brief-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-end;flex-wrap:wrap}
 .brief-head h2,.brief-read h2,.brief-form h2{margin:0;overflow-wrap:anywhere}
 .brief-note{margin:6px 0 0;color:#4d655d;font-size:13px;line-height:1.7}
-.brief-search{width:min(100%,420px)}
+.brief-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.brief-search{flex:1 1 220px;width:auto;max-width:none}
+.brief-author{display:grid;gap:6px;min-width:min(100%,220px);font-size:12px;font-weight:650;color:#50665e}
+.brief-author select{font:inherit;font-weight:500;color:#183237}
+.brief-filter{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:0;background:#fff;border:1px solid #d7e1dd;border-radius:12px;padding:8px 12px;color:#153a36}
+.brief-filter:empty{display:none}
+.brief-filter button{padding:4px 10px;font-size:12px}
 .brief-list{display:grid;gap:10px;min-width:0}
 .brief-card,.brief-read,.brief-form{background:#fff;border:1px solid #d7e1dd;border-radius:16px;padding:clamp(14px,2.2vw,22px);min-width:0}
 .brief-card{display:grid;gap:8px}
@@ -402,12 +408,45 @@ button.brief-open p{margin:0;color:#4d655d;display:-webkit-box;-webkit-line-clam
 .brief-card em.brief-read-only{background:#f3f1ea;color:#6a5b3a}
 .brief-form{display:grid;gap:12px}
 .brief-form label,.brief-files{display:grid;gap:6px;font-size:14px;min-width:0}
-.brief-form input,.brief-form textarea,.brief-form select{width:100%;font:inherit}
+.brief-form input:not([type=checkbox]):not([type=radio]),.brief-form textarea,.brief-form select{width:100%;font:inherit}
 .brief-form textarea{min-height:240px;resize:vertical;line-height:1.8}
 .brief-body{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.9;margin:0}
 .brief-page .file-fold{min-width:0}
+button.brief-by{width:auto;border:0;background:transparent;padding:0;border-radius:0;color:#146559;text-decoration:underline;text-underline-offset:3px}
+button.brief-by:hover{background:transparent;border:0;color:#0c504b}
+.brief-badge{border-radius:30px;padding:2px 8px;font-size:12px;line-height:1.7}
+.brief-badge.private{background:#f3f1ea;color:#6a5b3a}
+.brief-badge.public{background:#e5f2ec;color:#1b6253}
+.brief-publish{min-inline-size:0;border:1px solid #d7e1dd;border-radius:14px;padding:12px 14px 14px;margin:0;background:#f6faf9;display:grid;gap:12px}
+.brief-publish legend{padding:0 4px;font-weight:750;color:#153a36}
+.brief-modes{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.brief-form .brief-choice{position:relative;display:grid;gap:2px;align-content:center;min-height:64px;border:1px solid #d7e1dd;background:#fff;border-radius:12px;padding:10px 12px;cursor:pointer}
+.brief-choice.on{border-color:#11675e;background:#e7f4f0;box-shadow:inset 0 0 0 1px #11675e}
+.brief-choice b{color:#153a36;font-size:14px}
+.brief-choice span{color:#50665e;font-size:12px;line-height:1.6}
+.brief-choice:focus-within{outline:2px solid #11675e;outline-offset:2px}
+.brief-public:not([hidden]),.brief-pick:not([hidden]){display:grid;gap:8px}
+.brief-unit{border:1px solid #d7e1dd;border-radius:12px;background:#fff;padding:10px 12px}
+.brief-unit.on{border-color:#8fbeb4;background:#f3faf7}
+.brief-form .brief-unit-head{display:flex;align-items:flex-start;gap:8px;cursor:pointer}
+.brief-unit-head span{display:grid;gap:2px}
+.brief-unit-head small,.brief-person-check small{font-weight:500;color:#50665e;font-size:11px}
+.brief-unit :is(input[type=checkbox],input[type=radio]){width:16px;height:16px;padding:0;margin-top:2px;border-radius:4px;box-shadow:none;flex:none;accent-color:#11675e}
+.brief-publish .brief-choice input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);border:0;box-shadow:none}
+.brief-people:not([hidden]){display:grid;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid #e5eeeb}
+.brief-who{display:flex;flex-wrap:wrap;gap:8px 14px}
+.brief-form .brief-who label,.brief-form .brief-person-check{display:flex;align-items:flex-start;gap:6px;font-size:13px;font-weight:500}
+.brief-people-list:not([hidden]){display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px}
+.brief-person-search[hidden]{display:none}
+.brief-person-check{padding:6px 8px;border-radius:8px;background:#f6faf9;min-width:0}
+.brief-form .brief-person-check[hidden]{display:none}
+.brief-person-check span{display:grid;min-width:0}
+.brief-person-search{font:inherit}
+.brief-reach{margin:0;background:#fff;border-radius:10px;padding:8px 10px;color:#1b6253;font-size:13px;line-height:1.7}
 @media(max-width:640px){
   .brief-head{align-items:stretch}
   .brief-head .pri,.brief-actions button{width:100%}
   .brief-form textarea{min-height:180px}
+  .brief-modes{grid-template-columns:1fr}
+  .brief-author,.brief-search{width:100%}
 }

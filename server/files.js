@@ -1,7 +1,7 @@
 import { raw } from 'express';
 import mongoose from 'mongoose';
 import { Contract, Customer, LegalCase, Report } from './models.js';
-import { noteReportFile } from './reports.js';
+import { canReadReport, noteReportFile, sameAuthor } from './reports.js';
 import { hasPerm, normalizeUnitIds } from './perms.js';
 import { canAccessCase, legalUnitId } from './workcases.js';
 import { AppError } from './validate.js';
@@ -37,9 +37,9 @@ export function mountFiles(api, auth, wrap) {
 
     if (kind === 'report') {
       if (!hasPerm(req.user, 'brief')) throw new AppError('اجازه دسترسی ندارید', 403);
-      const report = await Report.findById(parent).select('authorId').lean();
-      if (!report) throw new AppError('گزارش پیدا نشد', 404);
-      if (req.method !== 'GET' && String(report.authorId) !== String(req.user._id)) {
+      const report = await Report.findById(parent).select('authorId visibility audienceScope audienceUnits').lean();
+      if (!report || !canReadReport(req.user, report)) throw new AppError('گزارش پیدا نشد', 404);
+      if (req.method !== 'GET' && !sameAuthor(req.user, report)) {
         throw new AppError('فقط نویسنده می‌تواند پیوست این گزارش را تغییر دهد', 403);
       }
       return next();

@@ -266,6 +266,18 @@ const metaSchema = new Schema({
   updatedAt: Date,
 }, { versionKey: false, collection: 'meta' });
 
+const audienceUnitSchema = new Schema({
+  id: { type: String, required: true },
+  everyone: { type: Boolean, default: true },
+  userIds: { type: [String], default: [] },
+}, { _id: false });
+
+const reportPublishSchema = new Schema({
+  mode: { type: String, enum: ['private', 'public'], default: 'public' },
+  scope: { type: String, enum: ['all', 'units'], default: 'all' },
+  units: { type: [audienceUnitSchema], default: [] },
+}, { _id: false });
+
 const userSchema = new Schema({
   username: { type: String, required: true, unique: true, lowercase: true, trim: true },
   passwordHash: { type: String, required: true },
@@ -276,6 +288,7 @@ const userSchema = new Schema({
   unitIds: { type: [String], default: [] },
   active: { type: Boolean, default: true },
   jobTitle:String,phone:String,lastLoginAt: Date,
+  reportPublish: { type: reportPublishSchema, default: undefined },
 }, { timestamps: true, versionKey: false });
 userSchema.index({ unitIds: 1 });
 userSchema.index({ role: 1, active: 1 });
@@ -480,12 +493,16 @@ const reportSchema = new Schema({
   authorUser: { type: String, default: '' },
   unitIds: { type: [String], default: [] },
   unitNames: { type: [String], default: [] },
+  visibility: { type: String, enum: ['private', 'public'], default: 'public' },
+  audienceScope: { type: String, enum: ['all', 'units'], default: 'all' },
+  audienceUnits: { type: [audienceUnitSchema], default: [] },
   createdAt: Date,
   updatedAt: Date,
   revisions: { type: [reportRevisionSchema], default: [] },
 }, { versionKey: false });
 reportSchema.index({ authorId: 1, updatedAt: -1 });
 reportSchema.index({ updatedAt: -1 });
+reportSchema.index({ 'audienceUnits.id': 1, updatedAt: -1 });
 
 export const Project = mongoose.model('Project', projectSchema);
 export const Customer = mongoose.model('Customer', customerSchema);
