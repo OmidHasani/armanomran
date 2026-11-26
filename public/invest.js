@@ -227,7 +227,7 @@ ${art6}
   function editInvestDoc(id) {
     const c = S.contracts.find((x) => x.id == id);
     if (!c || c.type !== 'invest') return toast('فقط برای قرارداد سرمایه‌گذاری');
-    if (!can('write')) return toast('دسترسی ویرایش ندارید');
+    if (!canAct('cont_edit')) return toast('دسترسی ویرایش ندارید');
     const cu = cust(c.cust);
     const p = proj(c.proj) || { name: '', addr: '' };
     const u = unitOf(c.proj, c.unit);

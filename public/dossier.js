@@ -13,6 +13,7 @@ function ownerOn(c,date){
 }
 function panelMenu(label,buttons){return '<details class="action-menu"><summary>'+label+'</summary><div>'+buttons+'</div></details>'}
 function payEditor(id){
+  if(!canAct('pay_add')&&!canAct('pay_edit'))return toast('اجازه ثبت پرداخت ندارید');
   const [c,i]=gi(id), old=receipts(c,i);
   const m=$('#modal');
   m.innerHTML=`<div class="box box-wide pay-editor"><h3>واریزهای ${esc(i.title)}</h3><p class="pay-editor-meta">مبلغ قسط <b>${T(i.amt)}</b> — مانده <b>${T(balance(i))}</b></p>
@@ -88,13 +89,14 @@ function installmentRow(c,i){
   const paid=collected(i),rest=balance(i),list=receipts(c,i);
   const tone=i.paid?'ok':diff(i.date)<0?'bad':'warn';
   const status=i.paid?'تسویه':paid?'پرداخت بخشی':diff(i.date)<0?'معوق':'در انتظار';
-  const extra=[can('write')?`<button onclick="startInstEdit('${i.id}')">ویرایش قسط</button>`:'',
+  const extra=[canAct('cont_edit')?`<button onclick="startInstEdit('${i.id}')">ویرایش قسط</button>`:'',
     canRefer()&&!i.paid?`<button onclick="referInst('${c.id}','${i.id}')">ارجاع قسط</button>`:'',
-    can('write')&&!paid?`<button class="x" onclick="delI('${i.id}')">حذف قسط</button>`:'',
+    canAct('cont_edit')&&!paid?`<button class="x" onclick="delI('${i.id}')">حذف قسط</button>`:'',
     list.length?`<button onclick="openRc('${c.id}','${i.id}')">رسید واریزها</button>`:''].join('');
+  const payBtn=canAct('pay_edit')||(canAct('pay_add')&&!i.paid);
   return `<article data-open-card class="install-line"><div class="install-main"><div><b>${esc(i.title)}</b><small>سررسید ${F(i.date)}</small></div>
   <div><small>مبلغ قسط</small><b>${T(i.amt)}</b></div><div><small>مانده</small><b>${T(rest)}</b></div>
-  <span class="badge ${tone}">${status}</span><div class="line-tools">${can('write')?`<button ${list.length?'':'data-card-primary'} class="sm btn-soft" onclick="payEditor('${i.id}')">${paid?'مدیریت واریزها':'＋ ثبت واریز'}</button>`:''}${extra?panelMenu('عملیات',extra):''}</div></div>
+  <span class="badge ${tone}">${status}</span><div class="line-tools">${payBtn?`<button ${list.length?'':'data-card-primary'} class="sm btn-soft" onclick="payEditor('${i.id}')">${paid&&canAct('pay_edit')?'مدیریت واریزها':'＋ ثبت واریز'}</button>`:''}${extra?panelMenu('عملیات',extra):''}</div></div>
   ${list.length?`<details class="receipt-detail"><summary data-card-primary>${F(list.length)} واریز — ${T(paid)}</summary>${list.map(p=>`<p>${F(p.date)} — ${esc(p.name)} — ${T(p.amt)} — پیگیری ${esc(F(p.ref||'—'))}${p.fee?' — جریمه '+T(p.fee):''}</p>`).join('')}</details>`:''}</article>`;
 }
 const regular=i=>!collected(i)&&i.kind!=='deposit'&&i.kind!=='lump'&&!/پیش.پرداخت|قرض.الحسنه|الباقی/.test(i.title);
@@ -154,8 +156,8 @@ function bankField(){return {k:'accountId',l:'حساب دریافت وجه',t:'s
 function bankBook(){
   const items=S.cfg.accounts||[];
   const m=$('#modal');
-  m.innerHTML=`<div class="box"><h3>حساب‌های بانکی پروژه‌ها</h3>${items.map((a,k)=>`<div class="bank-row"><div><b>${esc(a.bank)} — ${esc(a.holder)}</b><small>${esc(F(a.iban||a.number||a.card))} — شعبه ${esc(F(a.branch||'—'))}</small></div>${can('write')?`<button onclick="editBank(${k})">ویرایش</button>`:''}</div>`).join('')||empty('حسابی تعریف نشده است.')}
-  <div class="act">${can('write')?'<button class="pri" onclick="editBank(-1)">＋ حساب جدید</button>':''}<button onclick="closeM()">بستن</button></div></div>`;
+  m.innerHTML=`<div class="box"><h3>حساب‌های بانکی پروژه‌ها</h3>${items.map((a,k)=>`<div class="bank-row"><div><b>${esc(a.bank)} — ${esc(a.holder)}</b><small>${esc(F(a.iban||a.number||a.card))} — شعبه ${esc(F(a.branch||'—'))}</small></div>${canAct('proj_write')?`<button onclick="editBank(${k})">ویرایش</button>`:''}</div>`).join('')||empty('حسابی تعریف نشده است.')}
+  <div class="act">${canAct('proj_write')?'<button class="pri" onclick="editBank(-1)">＋ حساب جدید</button>':''}<button onclick="closeM()">بستن</button></div></div>`;
   openM();
 }
 function editBank(index){
@@ -185,17 +187,19 @@ function draftList(){
   return `<details class="file-fold"><summary>پیش‌نویس قراردادها <small>${F(drafts.length)}</small></summary>${drafts.map((d,n)=>`<div class="bank-row"><b>${esc(cust(d.values.cust).name)} — ${esc(proj(d.values.project)?.name||'پروژه انتخاب نشده')}</b><div><button onclick="addC(S.cfg.drafts[${n}].values)">ادامه</button> <button class="x" onclick="removeDraft(${n})">حذف</button></div></div>`).join('')||empty('پیش‌نویسی ذخیره نشده است.')}</details>`;
 }
 async function removeDraft(n){if(await confirmUI({title:'حذف پیش‌نویس',body:'<p>این پیش‌نویس برای همیشه حذف شود؟</p>',okLabel:'بله، حذف شود',danger:true})){S.cfg.drafts.splice(n,1);save();render()}}
-function filesPanel(kind,parent){
-  const labels=kind==='customer'?[...KY,'سایر مدارک']:kind==='workcase'?['پیوست ارجاع','نامه / مدرک','فیش / رسید','سایر']:['قرارداد امضاشده','الحاقیه','فیش پرداخت','سایر مدارک'];
-  const canUp=kind==='workcase'?(can('write')||canRefer()||canInbox()):can('write');
-  const open=kind==='contract'?'open':'';
-  return `<details ${open} class="file-fold" ontoggle="if(this.open)listFiles(this)" data-kind="${kind}" data-parent="${parent}"><summary>${kind==='workcase'?'پیوست‌های ارجاع':'مدارک و پیوست‌های پرونده'}</summary><div class="files-body"><div class="file-results"></div>${canUp?`<div class="upload-row"><label>نوع مدرک<select>${labels.map(l=>'<option>'+esc(l)+'</option>').join('')}</select></label><label>PDF، تصویر، Word یا Excel — تا ۸ مگابایت<input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx"></label><button onclick="uploadFiles(this.closest('details'))">بارگذاری</button></div>`:''}<p role="status"></p></div></details>`;
+function filesPanel(kind,parent,opts){
+  const mine=!!(opts&&opts.mine);
+  const labels=kind==='customer'?[...KY,'سایر مدارک']:kind==='workcase'?['پیوست ارجاع','نامه / مدرک','فیش / رسید','سایر']:kind==='report'?['پیوست گزارش','سند','تصویر','سایر']:['قرارداد امضاشده','الحاقیه','فیش پرداخت','سایر مدارک'];
+  const canUp=kind==='report'?mine:kind==='workcase'?(can('write')||canRefer()||canInbox()):kind==='customer'?canAct('cust_write'):canAct('cont_edit');
+  const open=kind==='contract'||kind==='report'?'open':'';
+  const summary=kind==='workcase'?'پیوست‌های ارجاع':kind==='report'?'پیوست‌های گزارش':'مدارک و پیوست‌های پرونده';
+  return `<details ${open} class="file-fold" ontoggle="if(this.open)listFiles(this)" data-kind="${kind}" data-parent="${esc(parent)}" data-mine="${mine?'1':''}"><summary>${summary}</summary><div class="files-body"><div class="file-results"></div>${canUp?`<div class="upload-row"><label>نوع مدرک<select>${labels.map(l=>'<option>'+esc(l)+'</option>').join('')}</select></label><label>PDF، تصویر، Word یا Excel — تا ۸ مگابایت<input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx"></label><button onclick="uploadFiles(this.closest('details'))">بارگذاری</button></div>`:''}<p role="status"></p></div></details>`;
 }
 const filesUrl=el=>'/api/files/'+el.dataset.kind+'/'+encodeURIComponent(el.dataset.parent);
 async function listFiles(el){
   try{
     const rows=await api(filesUrl(el));
-    const canDel=el.dataset.kind==='workcase'?(can('write')||canRefer()||canInbox()):can('write');
+    const canDel=el.dataset.kind==='report'?el.dataset.mine==='1':el.dataset.kind==='workcase'?(can('write')||canRefer()||canInbox()):el.dataset.kind==='customer'?canAct('cust_write'):canAct('cont_edit');
     el.querySelector('.file-results').innerHTML=rows.map(f=>`<div class="bank-row"><div><a href="${filesUrl(el)}/${f._id}">${esc(f.title)}</a><small>${esc(f.category)} — ${F(Math.ceil(f.size/1024))} کیلوبایت</small></div>${canDel?`<button class="sm x" onclick="removeFile(this.closest('details'),'${f._id}')">حذف</button>`:''}</div>`).join('')||'<p>هنوز فایلی پیوست نشده است.</p>';
   }catch(e){el.querySelector('[role=status]').textContent=e.message}
 }
@@ -267,6 +271,7 @@ async function showAudit(button,id,before){
   }catch(e){toast(e.message)}
 }
 function editReservationPayment(id,index){
+  if(!canAct('pay_edit'))return toast('اجازه ویرایش پرداخت ندارید');
   const r=S.reservations.find(x=>x.id===id),p=r?.pays[index];
   if(!p||r.st!=='active')return;
   form('ویرایش واریز رزرو',[{k:'amt',l:'مبلغ واریز',t:'money',r:1},{k:'date',l:'تاریخ',j:1,r:1},...PF],p,v=>{

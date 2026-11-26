@@ -8,6 +8,7 @@ const glyphs = {
   res:'M4 5h16v16H4z M8 3v5m8-5v5M4 10h16 M8 15l3 3 5-5',
   acct:'M3 7h18v13H3z M3 7l14-4v4 M16 12h5v4h-5z',
   inbox:'M3 14l3-9h12l3 9v6H3z M3 14h5l2 3h4l2-3h5',
+  brief:'M6 3h8l4 4v14H6z M14 3v4h4 M8 11h8 M8 15h5',
   legal:'M12 3v17m-6 1h12M3 7l18-2 M6 7l-3 7h6zm12-2-3 8h6z',
   rep:'M4 3v17h17 M8 16v-4m5 4V7m5 9v-6',
   list:'M9 6h12M9 12h12M9 18h12 M3 6h1m-1 6h1m-1 6h1',
@@ -22,7 +23,7 @@ function setMenu(open) {
 }
 document.querySelector('#menuToggle').onclick = e => setMenu(e.currentTarget.getAttribute('aria-expanded') !== 'true');
 function workspaceNav(nav, active) {
-  const groups=[['فضای کار',['dash','inbox']],['فروش و املاک',['lead','cust','proj','res','cont']],['مالی و سازمان',['acct','legal','rep']]];
+  const groups=[['فضای کار',['dash','inbox','brief']],['فروش و املاک',['lead','cust','proj','res','cont']],['مالی و سازمان',['acct','legal','rep']]];
   return groups.map(([title,keys])=>{
     const links=keys.map(key=>nav.find(([k])=>k===key)).filter(Boolean);
     if(!links.length)return '';
@@ -64,19 +65,69 @@ function refreshCaseCounts() {
   const mine=document.getElementById('assignedPreview');if(mine)mine.innerHTML=assignedPreview();
   if(legal)legal.textContent=F(openCount(LEGAL_STATS));
 }
-function dash() {
+function deskDate(){
+  return new Intl.DateTimeFormat('fa-IR',{dateStyle:'full'}).format(new Date());
+}
+function deskTop(label){
+  return `<div class="desk-top"><span>فضای کار / <b>${label}</b></span><time>${uiIcon('res')}${deskDate()}</time></div>`;
+}
+function caseDue(c){
+  const next=lastFollowOf(c)?.next;
+  return next?diff(next):null;
+}
+function legalDash(){
+  const open=LEGAL.filter(c=>c.status!=='done');
+  const mine=inboxScoped(open,'tome');
+  const due=open.filter(c=>{const d=caseDue(c);return d!=null&&d<=0});
+  const today=open.filter(c=>caseDue(c)===0);
+  const fresh=open.filter(c=>c.status==='new');
+  const upcoming=open.filter(c=>lastFollowOf(c)?.next).sort((a,b)=>String(lastFollowOf(a).next).localeCompare(String(lastFollowOf(b).next))).slice(0,8);
+  const row=c=>{
+    const next=lastFollowOf(c)?.next;
+    const when=next?`${F(next)}${caseDue(c)<0?' — عقب‌افتاده':caseDue(c)===0?' — امروز':''}`:'موعد ثبت نشده';
+    return `<button type="button" class="follow-item" onclick="go('ld','${c.id}')"><span><b>${esc(c.title||c.customer?.name||kindLabel(c.kind))}</b><small>${esc(c.customer?.name||'')} ${c.priority==='high'?'· فوری':''}</small></span><em>${esc(when)}</em></button>`;
+  };
+  return `${deskTop('میز کار حقوقی')}
+    <section class="desk-cover legal-cover"><div><h2>پیگیری پرونده‌های ارجاعی</h2><p>${esc(actor())}، ${F(mine.length)} پرونده باز روی میز شماست و ${F(due.length)} مورد موعد رسیده یا عقب‌افتاده دارد.</p><div class="cover-actions">${can('legal')?'<button onclick="go(\'legal\')">پرونده‌های حقوقی</button>':''}${canInbox()?'<button onclick="go(\'inbox\')">صندوق ارجاعات</button>':''}${can('cont')?'<button onclick="go(\'cont\')">مشاهده قراردادها</button>':''}</div></div></section>
+    <div class="metrics">${metric('پرونده باز',open.length,'پرونده','legal','blue')}${metric('روی میز من',mine.length,'پرونده','inbox','jade')}${metric('موعد رسیده',due.length,'مورد','clock','rose')}${metric('ارجاع تازه',fresh.length,'پرونده','list','honey')}</div>
+    <div class="desk-grid"><section class="ws-panel"><header><h3>موعدهای پیگیری</h3>${today.length?`<span>${F(today.length)} مورد امروز</span>`:''}</header>${upcoming.length?`<div class="follow-list">${upcoming.map(row).join('')}</div>`:'<div class="queue-empty">'+uiIcon('clock')+'<strong>موعد پیگیری بازی ندارید</strong><span>وقتی برای پرونده موعد بعدی ثبت شود اینجا می‌آید.</span></div>'}</section>
+    <div class="desk-rail">${canInbox()?`<section class="ws-panel"><header><h3>ارجاع‌های نیازمند مشاهده</h3></header><div id="assignedPreview">${assignedPreview()}</div></section>`:''}
+    <section class="ws-panel"><header><h3>دسترسی این میز</h3></header><p class="desk-note">قراردادها فقط برای مشاهده‌اند. ثبت و تغییر پرداخت، ویرایش قرارداد و آمار فروش در این میز نیست.</p>${can('cont')?`<button class="rail-link" onclick="go('cont')">${uiIcon('cont')}فهرست قراردادها <b>${F(S.contracts.length)}</b> ‹</button>`:''}${can('legal')?`<button class="rail-link" onclick="go('legal')">${uiIcon('legal')}کارتابل حقوقی <b id="openLegal">${F(open.length)}</b> ‹</button>`:''}</section></div></div>`;
+}
+function contractsDash(){
+  const drafts=S.cfg?.drafts||[];
+  const bare=S.contracts.filter(c=>!(c.inst||[]).length);
+  const late=S.contracts.filter(c=>(c.inst||[]).some(i=>!i.paid&&diff(i.date)<0));
+  const recent=[...S.contracts].sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,6);
+  return `${deskTop('میز کار قراردادها')}
+    <section class="desk-cover contract-cover"><div><h2>ثبت و پیگیری قرارداد</h2><p>${esc(actor())}، از اینجا قرارداد جدید را ثبت کنید و پرونده‌هایی که هنوز جدول اقساط یا پیگیری ندارند را کامل کنید.</p><div class="cover-actions">${canAct('cont_add')?'<button onclick="addC()">＋ ثبت قرارداد</button>':''}${canAct('cust_write')?'<button onclick="addCu()">＋ مشتری</button>':''}<button onclick="go('cont')">فهرست قراردادها</button></div></div></section>
+    <div class="metrics">${metric('قراردادهای ثبت‌شده',S.contracts.length,'قرارداد','cont','blue')}${metric('پیش‌نویس باز',drafts.length,'پیش‌نویس','list','honey')}${metric('بدون جدول اقساط',bare.length,'قرارداد','clock','rose')}${metric('قسط معوق',late.length,'قرارداد','legal','jade')}</div>
+    <div class="desk-actions">
+      ${canAct('cont_add')?`<button type="button" class="desk-action" onclick="addC()"><i>${uiIcon('cont')}</i><b>ثبت قرارداد جدید</b><span>انتخاب واحد، خریدار و برنامه پرداخت</span></button>`:''}
+      ${canAct('cont_edit')?`<button type="button" class="desk-action" onclick="go('cont')"><i>${uiIcon('list')}</i><b>ویرایش قراردادها</b><span>اصلاح مشخصات، اقساط و متن سند</span></button>`:''}
+      ${can('cont')&&!canAct('cont_edit')?`<button type="button" class="desk-action" onclick="go('cont')"><i>${uiIcon('cont')}</i><b>مشاهده قراردادها</b><span>بدون امکان تغییر یا ثبت پرداخت</span></button>`:''}
+      ${canAct('cust_write')?`<button type="button" class="desk-action" onclick="go('cust')"><i>${uiIcon('cust')}</i><b>مشتریان قرارداد</b><span>ثبت خریدار و باز کردن پرونده</span></button>`:''}
+    </div>
+    <div class="desk-grid"><section class="ws-panel"><header><h3>آخرین قراردادها</h3><button onclick="go('cont')">همه ‹</button></header>${recent.length?`<div class="follow-list">${recent.map(c=>`<button type="button" class="follow-item" onclick="go('cd','${c.id}')"><span><b>${esc(c.no)}</b><small>${esc(cust(c.cust).name)} — ${esc(unitTxt(c.proj,c.unit))}</small></span><em>${F(c.date)}</em></button>`).join('')}</div>`:'<div class="queue-empty">'+uiIcon('cont')+'<strong>هنوز قراردادی ثبت نشده</strong><span>اولین قرارداد را از دکمه بالا بسازید.</span></div>'}</section>
+    <div class="desk-rail"><section class="ws-panel"><header><h3>نیازمند تکمیل</h3></header>${bare.length?bare.slice(0,5).map(c=>`<button class="rail-link" onclick="go('cd','${c.id}')">${uiIcon('clock')}${esc(c.no)} <b>بدون قسط</b> ‹</button>`).join(''):'<p class="desk-note">قرارداد بدون برنامه اقساط ندارید.</p>'}${late.length?`<p class="desk-note">${F(late.length)} قرارداد قسط سررسیدشده دارد. پیگیری مالی فقط اگر اجازه ثبت پرداخت داشته باشید ممکن است.</p>`:''}</section></div></div>`;
+}
+function manageDash() {
   const units=S.projects.flatMap(p=>p.units||[]);
   const due=dueList();
   const paid=sum(S.contracts,paidSum);
   const total=sum(S.contracts,c=>c.total);
-  const date=new Intl.DateTimeFormat('fa-IR',{dateStyle:'full'}).format(new Date());
-
-  return `<div class="desk-top"><span>فضای کار / <b>میز کار</b></span><time>${uiIcon('res')}${date}</time></div>
-    <section class="desk-cover"><div><h2>میز کار فروش و پیگیری</h2><p>${esc(actor())}، امروز ${F(due.filter(x=>x.d===0).length)} مورد سررسید و ${F(due.filter(x=>x.d<0).length)} پیگیری عقب‌افتاده دارید.</p><div class="cover-actions">${can('write')&&can('lead')?'<button onclick="addL()">＋ ثبت سرنخ</button>':''}${canRefer()?'<button onclick="openReferDialog()">ارجاع جدید</button>':''}</div></div></section>
+  return `${deskTop('میز کار')}
+    <section class="desk-cover"><div><h2>میز کار فروش و پیگیری</h2><p>${esc(actor())}، امروز ${F(due.filter(x=>x.d===0).length)} مورد سررسید و ${F(due.filter(x=>x.d<0).length)} پیگیری عقب‌افتاده دارید.</p><div class="cover-actions">${canAct('lead_write')?'<button onclick="addL()">＋ ثبت سرنخ</button>':''}${canRefer()?'<button onclick="openReferDialog()">ارجاع جدید</button>':''}</div></div></section>
     <div class="metrics">${metric('واحد قابل فروش',units.filter(u=>u.st==='free').length,'واحد','proj','jade')}${metric('قراردادهای ثبت‌شده',S.contracts.length,'قرارداد','cont','blue')}${metric('مبلغ وصول‌شده',paid,'تومان','acct','honey')}${metric('مانده مطالبات',total-paid,'تومان','clock','rose')}</div>
     <div class="desk-grid"><section id="workQueue" class="ws-panel">${queueContent(due)}</section><div class="desk-rail">${canInbox()?`<section class="ws-panel"><header><h3>ارجاع‌های نیازمند مشاهده</h3></header><div id="assignedPreview">${assignedPreview()}</div></section>`:''}${inventoryPanel(units)}
     ${canInbox()||can('legal')?`<section class="ws-panel"><header><h3>ارجاعات و حقوقی</h3></header>${canInbox()?`<button class="rail-link" onclick="go('inbox')">${uiIcon('inbox')}ارجاع باز من <b id="openInbox">${F(inboxScoped(WORK,'tome').filter(c=>c.status!=='done').length)}</b> ‹</button>`:''}${can('legal')?`<button class="rail-link" onclick="go('legal')">${uiIcon('legal')}پرونده باز حقوقی <b id="openLegal">${F(openCount(LEGAL_STATS))}</b> ‹</button>`:''}</section>`:''}
     </div></div>`;
+}
+function dash(){
+  const kind=typeof dashKind==='function'?dashKind():'manage';
+  if(kind==='legal')return legalDash();
+  if(kind==='contracts')return contractsDash();
+  return manageDash();
 }
 
 function projectCard(project,index) {
@@ -104,17 +155,17 @@ function filterProjects() {
   document.querySelector('#projectNoMatch').hidden=count>0;
 }
 function projV() {
-  return `<div class="top"><h2>پروژه‌ها و واحدها</h2><div class="cover-tools"><button onclick="bankBook()">حساب‌های بانکی</button>${can('write')?'<button class="pri" onclick="addP()">＋ پروژه جدید</button>':''}</div></div>
+  return `<div class="top"><h2>پروژه‌ها و واحدها</h2><div class="cover-tools">${can('acct')||canAct('proj_write')||can('proj')?'<button onclick="bankBook()">حساب‌های بانکی</button>':''}${canAct('proj_write')?'<button class="pri" onclick="addP()">＋ پروژه جدید</button>':''}</div></div>
   ${S.projects.length?`<div class="project-tools"><input id="projectQuery" type="search" aria-label="جستجوی پروژه" placeholder="نام پروژه، نشانی، مسئول بازدید یا شماره واحد" oninput="filterProjects()"><label><input type="checkbox" id="onlyFree" onchange="filterProjects()"> دارای واحد آزاد</label></div><div class="cards">${S.projects.map(projectCard).join('')}</div><div id="projectNoMatch" class="empty" hidden>پروژه‌ای با این مشخصات پیدا نشد.</div>`:empty('هنوز پروژه‌ای ثبت نشده است.')}`;
 }
 
 function customerRow(person,index,contractCounts) {
   const current=`S.customers[${index}].id`;
-  const actions=can('write')?`<details class="record-actions"><summary>عملیات</summary><div>
-    <button onclick="editCu(${current})">ویرایش مشخصات</button>
-    ${can('cont')?`<button onclick="addC({cust:${current}})">ثبت قرارداد</button>`:''}
-    ${can('res')?`<button onclick="addR({cust:${current}})">ثبت رزرو</button>`:''}
-    <button class="x" onclick="delCu(${current})">حذف مشتری</button></div></details>`:'';
+  const actions=canAct('cust_write')||canAct('cont_add')||canAct('res_write')?`<details class="record-actions"><summary>عملیات</summary><div>
+    ${canAct('cust_write')?`<button onclick="editCu(${current})">ویرایش مشخصات</button>`:''}
+    ${canAct('cont_add')?`<button onclick="addC({cust:${current}})">ثبت قرارداد</button>`:''}
+    ${canAct('res_write')?`<button onclick="addR({cust:${current}})">ثبت رزرو</button>`:''}
+    ${canAct('cust_write')?`<button class="x" onclick="delCu(${current})">حذف مشتری</button>`:''}</div></details>`:'';
   return `<article data-open-card class="person-row" data-s="${esc(N([person.name,person.father,person.nid,person.phone].join(' ')))}">
     <div class="person-title"><span class="avatar" aria-hidden="true">${esc((person.name||'').trim()[0]||'')}</span>
       <div><strong>${esc(person.name)}</strong><small>کد ملی ${esc(F(person.nid||'—'))}</small></div></div>
@@ -126,7 +177,7 @@ function customerRow(person,index,contractCounts) {
 function custV() {
   const counts=new Map();
   S.contracts.forEach(c=>ownerList(c).forEach(o=>counts.set(o.customer,(counts.get(o.customer)||0)+1)));
-  return `<div class="top"><h2>مشتریان</h2>${can('write')?'<button class="pri" onclick="addCu()">＋ مشتری جدید</button>':''}</div>
+  return `<div class="top"><h2>مشتریان</h2>${canAct('cust_write')?'<button class="pri" onclick="addCu()">＋ مشتری جدید</button>':''}</div>
     ${S.customers.length?`<input type="search" class="sb" aria-label="جستجوی مشتری" placeholder="جستجو با نام، کد ملی یا شماره همراه" oninput="filterPeople(this.value)"><div class="people-list">${S.customers.map((c,i)=>customerRow(c,i,counts)).join('')}</div><div id="noPeople" class="empty" hidden>مشتری‌ای با این مشخصات پیدا نشد.</div>`:empty('هنوز مشتری‌ای ثبت نشده است.')}`;
 }
 function filterPeople(query) {
@@ -149,7 +200,7 @@ function reservationCard(r,index) {
     <dl><div><dt>وجه پرداخت‌شده</dt><dd>${T(paid)}</dd></div><div><dt>مانده رزرو</dt><dd>${T(remaining)}</dd></div></dl>
     <div class="booking-due">مهلت تکمیل وجه <b>${esc(F(r.deadline))}</b>${due?`<span class="badge ${days<0?'bad':'warn'}">${days<0?F(-days)+' روز تأخیر':days===0?'امروز':F(days)+' روز مانده'}</span>`:''}</div>
     ${cancelStep?`<p>مرحله لغو — ${esc(cancelStep)}</p>`:''}
-    <footer><button data-card-primary onclick="go('rd',S.reservations[${index}].id)">پرونده رزرو ‹</button>${canDeleteRec()?`<button class="sm x" onclick="delR(S.reservations[${index}].id)">حذف</button>`:''}</footer></article>`;
+    <footer><button data-card-primary onclick="go('rd',S.reservations[${index}].id)">پرونده رزرو ‹</button>${canAct('res_write')?`<button class="sm x" onclick="delR(S.reservations[${index}].id)">حذف</button>`:''}</footer></article>`;
 }
 function filterBookings() {
   const q=nm(N(document.querySelector('#bookingQuery').value));
@@ -162,7 +213,7 @@ function filterBookings() {
   document.querySelector('#noBookings').hidden=visible>0;
 }
 function res() {
-  const write=can('write');
+  const write=canAct('res_write');
   return `<div class="top"><h2>رزروها و رزرونامه‌ها</h2><div class="cover-tools"><button onclick="chkF()">استعلام فیش</button>${write?'<button onclick="cfgR()">تنظیمات رزرو</button><button class="pri" onclick="addR()">＋ رزرو جدید</button>':''}</div></div>
     ${S.reservations.length?`<div class="project-tools"><input id="bookingQuery" type="search" aria-label="جستجوی رزرو" placeholder="شماره رزرو، نام مشتری، همراه یا واحد" oninput="filterBookings()"><select aria-label="وضعیت رزرو" id="bookingStatus" onchange="filterBookings()"><option value="">همه وضعیت‌ها</option>${Object.entries(RS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div>
     <div class="cards">${S.reservations.map(reservationCard).join('')}</div><div id="noBookings" class="empty" hidden>رزروی با این مشخصات پیدا نشد.</div>`:empty('هنوز رزروی ثبت نشده است.')}`;

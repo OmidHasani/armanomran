@@ -163,7 +163,7 @@
       if(!host.isConnected)return;
       const missing=[...fields.values()].filter(f=>!String(f.value).trim());
       status.textContent=missing.length?F(missing.length)+' فیلد خالی است. محل آن‌ها در سند با نقطه‌چین مشخص شده است.':'اطلاعات سند جای‌گذاری شد.';
-      const write=can('write');
+      const write=k==='res'?canAct('res_write'):canAct('cont_edit');
       const config={res:window.editReserveDoc,lease:window.editLeaseDoc,invest:window.editInvestDoc}[k];
       form.innerHTML=(write&&config?'<button type="button" data-config>مشخصات تکمیلی و برنامه پرداخت</button>':'')+'<div class="source-grid">'+[...fields.values()].map(f=>`<label>${esc(f.label)}<input data-id="${esc(f.id)}" maxlength="1000" value="${esc(String(f.value))}" ${write&&!f.locked?'':'readonly'}></label>`).join('')+'</div>'+(write?'<button class="pri">ذخیره اطلاعات سند</button>':'');
       if(write&&config)form.querySelector('[data-config]').onclick=()=>config(r.id);

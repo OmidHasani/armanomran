@@ -133,7 +133,7 @@ ${inlineSig()}
   function editReserveDoc(id) {
     const r = S.reservations.find((x) => x.id == id);
     if (!r) return toast('رزرو پیدا نشد');
-    if (!can('write')) return toast('دسترسی ویرایش ندارید');
+    if (!canAct('res_write')) return toast('دسترسی ویرایش ندارید');
     const cu = cust(r.cust);
     const p = proj(r.proj) || { name: '', addr: '' };
     const u = unitOf(r.proj, r.unit);

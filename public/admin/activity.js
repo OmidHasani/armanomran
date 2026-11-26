@@ -24,9 +24,42 @@ async function renderActivity(){
     $('#olderActivity').onclick=()=>{activityBefore=result.events.at(-1)._id;renderActivity()};
   }catch(e){if(state.tab===nowTab)content.textContent=e.message}
 }
+let securityUser='',securityBefore='';
+function auditCard(event,date){
+  const snap=event.snapshot||{};
+  const hadPrevious=!!(snap.previousTitle||snap.previousBody);
+  const changed=hadPrevious&&(String(snap.previousTitle||'')!==String(snap.title||'')||String(snap.previousBody||'')!==String(snap.body||''));
+  const units=(Array.isArray(snap.unitNames)?snap.unitNames:[]).filter(Boolean).join('، ');
+  const file=snap.file?`<p>فایل: <b>${esc(snap.file)}</b></p>`:'';
+  const before=changed?`<h4>متن پیش از ویرایش</h4><p class="audit-meta">عنوان: ${esc(snap.previousTitle||'—')}</p><pre>${esc(snap.previousBody||'')}</pre>`:'';
+  const afterLabel=changed?'متن پس از ویرایش':snap.file?'متن گزارش در زمان تغییر پیوست':'متن ثبت‌شده';
+  const after=(snap.body||snap.title||event.target)?`<h4>${afterLabel}</h4><p class="audit-meta">عنوان: ${esc(snap.title||event.target||'—')}</p><pre>${esc(snap.body||'')}</pre>`:'';
+  return `<article class="audit-card"><header><b>${esc(event.action||'تغییر گزارش')}</b><time>${date(snap.at||event.at)}</time></header><p>${esc(event.actor||snap.authorName||'')} <small>${esc(event.user||snap.authorUser||'')}</small>${units?' · واحد '+esc(units):''}</p>${file}${before}${after}</article>`;
+}
+async function renderSecurity(){
+  const content=$('#content'),nowTab=state.tab;
+  $('#headActions').innerHTML='<button id="reloadSecurity" class="btn" type="button">تازه‌سازی</button>';
+  $('#reloadSecurity').onclick=()=>{securityBefore='';renderSecurity()};
+  const params=new URLSearchParams({kind:'report',user:securityUser,before:securityBefore}),key=params.toString();
+  content.dataset.security=key;
+  try{
+    const result=await api('/api/admin/activity?'+params);
+    if(state.tab!==nowTab||content.dataset.security!==key)return;
+    const date=v=>v?new Date(v).toLocaleString('fa-IR',{dateStyle:'medium',timeStyle:'medium',timeZone:'Asia/Tehran'}):'—';
+    const users=state.users||[];
+    content.innerHTML='<p class="muted">هر ثبت، ویرایش و تغییر پیوست با نام کاربر، واحد، تاریخ و ساعت، و خود متن قبل و بعد از تغییر اینجا می‌ماند. ویرایش هر گزارش فقط برای نویسندهٔ همان گزارش ممکن است.</p><div class="security-tools"><label>کاربر <select id="securityUser"><option value="">همه کاربران</option>'+users.map(u=>'<option value="'+esc(u.username)+'">'+esc(u.name)+'</option>').join('')+'</select></label></div><div class="audit-list">'+((result.events||[]).map(e=>auditCard(e,date)).join('')||'<p>هنوز تغییری در گزارش‌ها ثبت نشده است.</p>')+'</div><div class="toolbar"><button id="latestSecurity" class="btn" type="button">آخرین تغییرات</button><button id="olderSecurity" class="btn" type="button">تغییرات قدیمی‌تر</button></div>';
+    $('#securityUser').value=securityUser;
+    $('#securityUser').onchange=e=>{securityUser=e.target.value;securityBefore='';renderSecurity()};
+    $('#latestSecurity').onclick=()=>{securityBefore='';renderSecurity()};
+    $('#olderSecurity').disabled=!result.more;
+    $('#olderSecurity').onclick=()=>{securityBefore=result.events.at(-1)._id;renderSecurity()};
+  }catch(e){if(state.tab===nowTab)content.textContent=e.message}
+}
 document.addEventListener('input',e=>{
   if(e.target.matches('[inputmode=numeric],[inputmode=tel]'))e.target.value=e.target.value.replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d]);
 });
 setInterval(()=>{
-  if(state.tab==='activity'&&!document.hidden&&!$('#shell').hidden&&!activityPage&&!activityBefore&&!$('#content').contains(document.activeElement))renderActivity();
+  if(document.hidden||$('#shell').hidden||$('#content').contains(document.activeElement))return;
+  if(state.tab==='activity'&&!activityPage&&!activityBefore)renderActivity();
+  if(state.tab==='security'&&!securityBefore)renderSecurity();
 },30000);

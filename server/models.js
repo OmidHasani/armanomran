@@ -272,6 +272,7 @@ const userSchema = new Schema({
   name: { type: String, required: true },
   role: { type: String, enum: ['admin', 'staff', 'legal'], required: true },
   perms: { type: [String], default: [] },
+  dashKind: { type: String, enum: ['', 'manage', 'legal', 'contracts'], default: '' },
   unitIds: { type: [String], default: [] },
   active: { type: Boolean, default: true },
   jobTitle:String,phone:String,lastLoginAt: Date,
@@ -281,6 +282,7 @@ userSchema.index({ role: 1, active: 1 });
 
 const orgUnitSchema = new Schema({
   perms:{type:[String],default:[]},
+  dashKind:{type:String,enum:['','manage','legal','contracts'],default:''},
   _id: String,
   name: { type: String, required: true },
   code: { type: String, required: true, unique: true, lowercase: true, trim: true },
@@ -461,6 +463,30 @@ const checkSchema = new Schema({
 checkSchema.index({ type: 1, dueDate: 1 });
 checkSchema.index({ party: 1, regDate: 1 });
 
+const reportRevisionSchema = new Schema({
+  at: Date,
+  previousTitle: String,
+  previousBody: String,
+  nextTitle: String,
+  nextBody: String,
+}, { _id: false });
+
+const reportSchema = new Schema({
+  _id: String,
+  title: { type: String, required: true },
+  body: { type: String, required: true },
+  authorId: { type: String, required: true },
+  authorName: { type: String, default: '' },
+  authorUser: { type: String, default: '' },
+  unitIds: { type: [String], default: [] },
+  unitNames: { type: [String], default: [] },
+  createdAt: Date,
+  updatedAt: Date,
+  revisions: { type: [reportRevisionSchema], default: [] },
+}, { versionKey: false });
+reportSchema.index({ authorId: 1, updatedAt: -1 });
+reportSchema.index({ updatedAt: -1 });
+
 export const Project = mongoose.model('Project', projectSchema);
 export const Customer = mongoose.model('Customer', customerSchema);
 export const Contract = mongoose.model('Contract', contractSchema);
@@ -474,3 +500,4 @@ export const User = mongoose.model('User', userSchema);
 export const OrgUnit = mongoose.model('OrgUnit', orgUnitSchema);
 export const LegalCase = mongoose.model('LegalCase', legalCaseSchema);
 export const WorkCase = LegalCase;
+export const Report = mongoose.model('Report', reportSchema);

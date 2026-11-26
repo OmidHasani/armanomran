@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test server/validate.test.js",
+    "test": "node --test server/validate.test.js server/access.test.js server/reports.test.js server/save-flow.test.js",
     "smoke": "node scripts/smoke-flow.mjs",
     "reset-admin": "node scripts/reset-admin.js"
   },

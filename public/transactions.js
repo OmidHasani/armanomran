@@ -115,11 +115,12 @@ function dealTools(pre,record,kind){
     button(project.parentElement,'＋ پروژه جدید',()=>child(addP,p=>({project:p.id,unit:'',base:0,total:0,accountId:p.accountId})));
     button(unit.parentElement,'＋ واحد جدید',()=>{const p=proj(project.value);if(!p)return toast('ابتدا پروژه را انتخاب کنید');child(done=>addU(p,done),u=>({unit:p.id+'|'+u.id,total:unitSaleTotal(u),base:unitSaleTotal(u)}))});
   }
-  if(can('cust'))button(customer.parentElement,'＋ مشتری جدید',()=>child(addCu,c=>customer.disabled?{}:{cust:c.id}));
+  if(canAct('cust_write'))button(customer.parentElement,'＋ مشتری جدید',()=>child(addCu,c=>customer.disabled?{}:{cust:c.id}));
   groupDealFields(modal,isContract);
-  if(isContract&&!record&&!pre.resId)button(modal.querySelector('.act'),'ذخیره پیش‌نویس',()=>saveDraft(snapshot()));
+  if(isContract&&!record&&!pre.resId&&canAct('cont_add'))button(modal.querySelector('.act'),'ذخیره پیش‌نویس',()=>saveDraft(snapshot()));
 }
 function editC(id){
+  if(typeof canAct==='function'&&!canAct('cont_edit'))return toast('اجازه ویرایش قرارداد ندارید');
   const c=S.contracts.find(x=>x.id===id);if(!c)return;
   const parts=payParts(c),regs=parts.instRows.filter(i=>!collected(i)),first=regs[0];
   const computed=calcInstPrice(c.baseTotal||c.total,c.extraOn,c.profitOn);
@@ -152,6 +153,7 @@ async function updateAgreement(c,v,owners,price){
   delete c.ed;repairLinks();save();render();return true;
 }
 function addR(pre={}){
+  if(!canAct('res_write'))return toast('اجازه ثبت رزرو ندارید');
   const r=S.reservations.find(x=>x.id===pre.editId);
   if(r&&r.st!=='active')return toast('این رزرو بسته شده است');
   const init={...(r?{...r,unit:r.proj+'|'+r.unit,plannedCash:r.plannedCash,plannedInstallments:r.plannedInstallments,total:r.doc?.total??unitSaleTotal(unitOf(r.proj,r.unit))}:{}),...pre,_boxClass:'deal-box'};
@@ -234,7 +236,7 @@ function compactQueue(title,items){
   const cases=new Map([...LEGAL,...WORK].map(c=>[c.sourceKey,c]));
   return '<section class="queue-group"><header><h4>'+esc(title)+'</h4><small>'+F(items.length)+' مورد</small></header>'+items.map(x=>{
     const key=queueKey(x),linked=cases.get(key),days=x.d<0?F(-x.d)+' روز تأخیر':x.d===0?'امروز':F(x.d)+' روز مانده';
-    return `<article data-open-card class="due-ticket" data-s="${esc(N([x.who,x.desc,x.ph,x.k].join(' ')))}"><header><div><small>${esc(x.k)}</small><h4>${esc(F(x.who))}</h4></div>${linked||referredSources.has(key)?'<span class="badge ok">ارجاع شده</span>':''}</header><p>${esc(F(x.desc))}</p><dl><div><dt>موعد پیگیری</dt><dd>${F(x.date)} <span class="badge ${x.d<0?'bad':'warn'}">${days}</span></dd></div>${x.amt==null?'':`<div><dt>${x.k==='لغو رزرو'?'قابل استرداد':'مانده قابل پرداخت'}</dt><dd>${T(x.amt)}</dd></div>`}</dl><footer><button data-card-primary onclick="${x.go}">پرونده</button>${x.pid&&can('write')?`<button onclick="pay('${x.pid}')">ثبت پرداخت</button>`:''}${linked?`<button onclick="go('${canInbox()?'wd':'ld'}','${linked.id}')">پیگیری ارجاع</button>`:canRefer()&&!referredSources.has(key)?`<button onclick="referDue('${esc(key)}')">ارجاع</button>`:''}</footer></article>`;
+    return `<article data-open-card class="due-ticket" data-s="${esc(N([x.who,x.desc,x.ph,x.k].join(' ')))}"><header><div><small>${esc(x.k)}</small><h4>${esc(F(x.who))}</h4></div>${linked||referredSources.has(key)?'<span class="badge ok">ارجاع شده</span>':''}</header><p>${esc(F(x.desc))}</p><dl><div><dt>موعد پیگیری</dt><dd>${F(x.date)} <span class="badge ${x.d<0?'bad':'warn'}">${days}</span></dd></div>${x.amt==null?'':`<div><dt>${x.k==='لغو رزرو'?'قابل استرداد':'مانده قابل پرداخت'}</dt><dd>${T(x.amt)}</dd></div>`}</dl><footer><button data-card-primary onclick="${x.go}">پرونده</button>${x.pid&&canAct('pay_add')?`<button onclick="pay('${x.pid}')">ثبت پرداخت</button>`:''}${linked?`<button onclick="go('${canInbox()?'wd':'ld'}','${linked.id}')">پیگیری ارجاع</button>`:canRefer()&&!referredSources.has(key)?`<button onclick="referDue('${esc(key)}')">ارجاع</button>`:''}</footer></article>`;
   }).join('')+'</section>';
 }
 let referredSources=new Set();

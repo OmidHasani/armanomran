@@ -3,23 +3,34 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
 const ROLE_LABEL = { admin: 'مدیر', staff: 'کارشناس فروش', legal: 'واحد حقوقی' };
+const DASH_LABEL = { manage: 'میز مدیریتی', legal: 'میز حقوقی', contracts: 'میز قراردادها' };
 const PERM_DEFS = [
-  { k: 'dash', l: 'داشبورد' },
-  { k: 'lead', l: 'سرنخ‌ها' },
-  { k: 'proj', l: 'پروژه‌ها' },
-  { k: 'cust', l: 'مشتریان' },
-  { k: 'cont', l: 'قراردادها' },
-  { k: 'res', l: 'رزروها' },
-  { k: 'acct', l: 'حسابداری' },
-  { k: 'rep', l: 'گزارش‌ها' },
-  { k: 'legal', l: 'حقوقی' },
-  { k: 'inbox', l: 'صندوق ارجاعات' },
-  { k: 'write', l: 'ویرایش CRM' },
-  { k: 'admin', l: 'مدیریت سیستم' },
+  { k: 'dash', l: 'داشبورد', g: 'view' },
+  { k: 'lead', l: 'سرنخ‌ها', g: 'view' },
+  { k: 'proj', l: 'پروژه‌ها و واحدها', g: 'view' },
+  { k: 'cust', l: 'مشتریان', g: 'view' },
+  { k: 'cont', l: 'مشاهده قراردادها', g: 'view' },
+  { k: 'res', l: 'رزروها', g: 'view' },
+  { k: 'acct', l: 'حسابداری', g: 'view' },
+  { k: 'rep', l: 'گزارش‌ها و آمار فروش', g: 'view' },
+  { k: 'legal', l: 'حقوقی و پرونده‌های ارجاعی', g: 'view' },
+  { k: 'inbox', l: 'صندوق ارجاعات', g: 'view' },
+  { k: 'brief', l: 'گزارش‌نویسی', g: 'view' },
+  { k: 'cont_add', l: 'ثبت قرارداد', g: 'act' },
+  { k: 'cont_edit', l: 'ویرایش و حذف قرارداد', g: 'act' },
+  { k: 'pay_add', l: 'ثبت پرداخت و واریز', g: 'act' },
+  { k: 'pay_edit', l: 'ویرایش و حذف پرداخت', g: 'act' },
+  { k: 'cust_write', l: 'ثبت و ویرایش مشتری', g: 'act' },
+  { k: 'proj_write', l: 'ثبت و ویرایش پروژه و واحد', g: 'act' },
+  { k: 'res_write', l: 'ثبت و ویرایش رزرو', g: 'act' },
+  { k: 'lead_write', l: 'ثبت و ویرایش سرنخ', g: 'act' },
+  { k: 'write', l: 'ویرایش کامل (همه اقدام‌ها)', g: 'power' },
+  { k: 'admin', l: 'مدیریت سیستم', g: 'power' },
 ];
+const ACTION_KEYS = PERM_DEFS.filter((p) => p.g === 'act').map((p) => p.k);
 const ROLE_DEFAULTS = {
   admin: PERM_DEFS.map((p) => p.k),
-  staff: ['dash', 'lead', 'proj', 'cust', 'cont', 'res', 'acct', 'rep', 'write', 'inbox'],
+  staff: ['dash', 'lead', 'proj', 'cust', 'cont', 'res', 'acct', 'rep', 'inbox', 'write', ...ACTION_KEYS],
   legal: ['dash', 'cust', 'cont', 'legal', 'inbox'],
 };
 
@@ -27,6 +38,7 @@ const NAV = [
   { id: 'overview', label: 'نمای کلی', eyebrow: 'خلاصه وضعیت' },
   { id: 'users', label: 'کاربران', eyebrow: 'حساب‌ها و دسترسی‌ها' },
   { id: 'units', label: 'واحدهای سازمانی', eyebrow: 'ساختار ارجاع' },
+  { id:'security',label:'امنیت و اطلاعات',eyebrow:'گزارش‌نویسی و تغییرات'},
   { id:'activity',label:'حضور و سوابق فعالیت',eyebrow:'نظارت مدیریت'},
   { id: 'settings', label: 'تنظیمات', eyebrow: 'قوانین خودکار' },
 ];
@@ -180,6 +192,7 @@ function render() {
   const actions = $('#headActions');
   const content = $('#content');
 
+  if(state.tab==='security'){renderSecurity();return}
   if(state.tab==='activity'){renderActivity();return}
   if (state.tab === 'overview') {
     actions.innerHTML = `<button class="btn" type="button" id="btnRefresh">بروزرسانی</button>`;
@@ -286,7 +299,7 @@ function usersHtml() {
       ${rows.map((u) => `
         <tr>
           <td><b>${esc(u.name)}</b><div class="muted">${esc(u.username)}</div></td>
-          <td>${esc(ROLE_LABEL[u.role] || u.role)}</td>
+          <td>${esc(ROLE_LABEL[u.role] || u.role)}<div class="muted">${esc(DASH_LABEL[u.dash] || DASH_LABEL[u.dashKind] || 'پیش‌فرض نقش')}</div></td>
           <td><span class="badge ${u.active === false ? 'bad' : 'ok'}">${u.active === false ? 'غیرفعال' : 'فعال'}</span></td>
           <td><div class="tags">${(u.unitIds || []).map((id) => `<span class="tag">${esc(unitName(id))}</span>`).join('') || '<span class="muted">—</span>'}</div></td>
           <td><div class="tags">${(u.role === 'admin' ? PERM_DEFS : (u.perms || []).map((k) => PERM_DEFS.find((p) => p.k === k) || { k, l: k })).slice(0, 4).map((p) => `<span class="tag">${esc(p.l)}</span>`).join('')}${(u.role === 'admin' || (u.perms || []).length > 4) ? `<span class="tag">+${fa(u.role === 'admin' ? PERM_DEFS.length - 4 : Math.max(0, (u.perms || []).length - 4))}</span>` : ''}</div></td>
@@ -323,7 +336,7 @@ function unitsHtml() {
           <h4>${esc(u.name)}</h4>
           <span class="badge ${u.active === false ? 'bad' : 'ok'}">${u.active === false ? 'غیرفعال' : 'فعال'}</span>
         </div>
-        <div class="meta"><code>${esc(u.code)}</code> — ${fa((u.memberIds || []).length)} عضو</div>
+        <div class="meta"><code>${esc(u.code)}</code> — ${fa((u.memberIds || []).length)} عضو${u.dashKind ? ` — ${esc(DASH_LABEL[u.dashKind] || u.dashKind)}` : ''}</div>
         <div class="meta">${esc(u.note || 'بدون توضیح')}</div>
         <div class="actions">
           <button class="btn sm" data-uedit="${u.id}">ویرایش</button>
@@ -356,11 +369,38 @@ function settingsHtml() {
   </section>`;
 }
 
-function permChecks(selected, role) {
-  const set = new Set(selected || []);
-  return `<div class="checks" id="permBox">${PERM_DEFS.map((p) => `
-    <label><input type="checkbox" data-p="${p.k}" ${role === 'admin' || set.has(p.k) ? 'checked' : ''} ${role === 'admin' ? 'disabled' : ''}> ${esc(p.l)}</label>
-  `).join('')}</div>`;
+function permChecks(selected, role, { adminKey = true } = {}) {
+  const set = new Set(role === 'admin' ? PERM_DEFS.map((p) => p.k) : (selected || []));
+  const locked = role === 'admin';
+  const group = (title, items) => `<div class="perm-group"><b>${esc(title)}</b><div class="checks">${items.map((p) => `
+    <label><input type="checkbox" data-p="${p.k}" data-g="${p.g}" ${set.has(p.k) ? 'checked' : ''} ${locked ? 'disabled' : ''}> ${esc(p.l)}</label>
+  `).join('')}</div></div>`;
+  const view = PERM_DEFS.filter((p) => p.g === 'view');
+  const act = PERM_DEFS.filter((p) => p.g === 'act');
+  const power = PERM_DEFS.filter((p) => p.g === 'power' && (adminKey || p.k !== 'admin'));
+  return `<div class="perm-groups" id="permBox">${group('دیدن بخش‌ها', view)}${group('اقدام‌ها — بدون تیک، همان بخش فقط خواندنی است', act)}${group('اختیار کلی', power)}</div>`;
+}
+function bindPermBox(root) {
+  const write = root.querySelector('[data-p=write]');
+  const acts = [...root.querySelectorAll('[data-g=act]')];
+  const sync = () => {
+    if (!write || write.disabled) return;
+    acts.forEach((el) => {
+      if (write.checked) el.checked = true;
+      el.disabled = write.checked;
+    });
+  };
+  write?.addEventListener('change', sync);
+  sync();
+}
+function dashSelect(name, value, inheritLabel) {
+  const current = value || '';
+  return `<select name="${name}">
+    <option value="" ${current === '' ? 'selected' : ''}>${esc(inheritLabel)}</option>
+    <option value="manage" ${current === 'manage' ? 'selected' : ''}>میز کار مدیریتی — فروش، موجودی واحد و درآمد</option>
+    <option value="legal" ${current === 'legal' ? 'selected' : ''}>میز کار حقوقی — ارجاع‌ها و پیگیری، بدون آمار فروش</option>
+    <option value="contracts" ${current === 'contracts' ? 'selected' : ''}>میز کار امور قراردادها — ثبت قرارداد، بدون موجودی و درآمد</option>
+  </select>`;
 }
 function unitChecks(selected) {
   const set = new Set(selected || []);
@@ -398,7 +438,9 @@ function userForm(init) {
       ${editing ? '' : `<div class="field span2"><label>تکرار رمز عبور <span class="req">*</span></label>
         <input name="password2" type="password" autocomplete="new-password" placeholder="همان رمز را دوباره وارد کنید">
       </div>`}
-      <div class="field"><label>سمت سازمانی</label><input name="jobTitle" value="${esc(init.jobTitle||'')}"></div><div class="field"><label>شماره تماس</label><input name="phone" inputmode="tel" value="${esc(init.phone||'')}"></div><div class="field span2"><label>عضویت در واحدهای سازمانی</label>${unitChecks(init.unitIds)}</div>
+      <div class="field"><label>سمت سازمانی</label><input name="jobTitle" value="${esc(init.jobTitle||'')}"></div><div class="field"><label>شماره تماس</label><input name="phone" inputmode="tel" value="${esc(init.phone||'')}"></div>
+      <div class="field span2"><label>میز کار این کاربر</label>${dashSelect('dashKind', init.dashKind, 'پیش‌فرض نقش و واحد')}<small class="hint">خالی یعنی واحد حقوقی میز حقوقی ببیند و بقیه میز مدیریتی. اگر واحد سازمانی میز دیگری دارد، تا وقتی اینجا چیزی انتخاب نشود همان اعمال می‌شود.${init.dash ? ` میز مؤثر الان: ${esc(DASH_LABEL[init.dash] || init.dash)}.` : ''}</small></div>
+      <div class="field span2"><label>عضویت در واحدهای سازمانی</label>${unitChecks(init.unitIds)}</div>
       <div class="field span2"><label>دسترسی‌های فردی (علاوه بر دسترسی واحدهای عضو)</label>${permChecks(init.perms, init.role || 'staff')}</div>
       ${editing ? `<div class="field span2"><label class="checkline"><input name="active" type="checkbox" ${init.active !== false ? 'checked' : ''}> حساب فعال باشد (غیرفعال = عدم ورود)</label></div>` : ''}
     </div>
@@ -408,9 +450,16 @@ function userForm(init) {
     </div>
   </div>`);
   const box = $('#modal .drawer');
+  const refreshPerms = (role, selected) => {
+    box.querySelector('#permBox').outerHTML = permChecks(selected, role);
+    bindPermBox(box);
+  };
+  bindPermBox(box);
   box.querySelector('[name=role]').onchange = (e) => {
     const role = e.target.value;
-    box.querySelector('#permBox').outerHTML = permChecks(ROLE_DEFAULTS[role] || [], role);
+    refreshPerms(role, ROLE_DEFAULTS[role] || []);
+    const dash = box.querySelector('[name=dashKind]');
+    if (dash && !init.id) dash.value = role === 'legal' ? 'legal' : '';
   };
   $('#cancel').onclick = closeModal;
   $('#ok').onclick = async () => {
@@ -420,6 +469,7 @@ function userForm(init) {
       username: box.querySelector('[name=username]').value.trim().toLowerCase(),
       password: box.querySelector('[name=password]').value,
       role: box.querySelector('[name=role]').value,
+      dashKind: box.querySelector('[name=dashKind]').value,
       perms: $$('#permBox [data-p]:checked').map((e) => e.dataset.p),
       unitIds: $$('#unitBox [data-u]:checked').map((e) => e.dataset.u),
     };
@@ -482,7 +532,8 @@ function unitForm(init) {
       <div class="field"><label>نام واحد</label><input name="name" placeholder="مثلاً امور قراردادها" value="${esc(init.name || '')}"></div>
       <div class="field"><label>کد انگلیسی</label><input name="code" ${init.code === 'legal' ? 'readonly' : ''} placeholder="contracts" value="${esc(init.code || '')}"></div>
       <div class="field span2"><label>توضیح</label><textarea name="note" rows="2">${esc(init.note || '')}</textarea></div>
-      <div class="field span2"><label>دسترسی مشترک همه اعضای این واحد</label><div class="checks">${PERM_DEFS.filter(p=>p.k!=='admin').map(p=>'<label><input type="checkbox" data-grant="'+p.k+'" '+(init.perms?.includes(p.k)?'checked':'')+'>'+esc(p.l)+'</label>').join('')}</div></div><div class="field span2"><label>اعضای واحد</label>${memberChecks}</div>
+      <div class="field span2"><label>میز کار اعضای این واحد</label>${dashSelect('dashKind', init.dashKind, 'بدون میز اختصاصی — هر عضو طبق نقش یا انتخاب خودش')}<small class="hint">اگر برای خود کاربر میز جدا انتخاب شده باشد، انتخاب کاربر مقدم است.</small></div>
+      <div class="field span2"><label>دسترسی مشترک همه اعضای این واحد</label>${permChecks(init.perms, 'staff', { adminKey: false }).replace('id="permBox"', 'id="unitPerms"')}</div><div class="field span2"><label>اعضای واحد</label>${memberChecks}</div>
       ${editing && init.code !== 'legal' ? `<div class="field span2"><label class="checkline"><input name="active" type="checkbox" ${init.active !== false ? 'checked' : ''}> واحد فعال باشد</label></div>` : ''}
     </div>
     <div class="drawer-actions">
@@ -491,13 +542,15 @@ function unitForm(init) {
     </div>
   </div>`);
   const box = $('#modal .drawer');
+  bindPermBox(box);
   $('#cancel').onclick = closeModal;
   $('#ok').onclick = async () => {
     const payload = {
       name: box.querySelector('[name=name]').value.trim(),
       code: box.querySelector('[name=code]').value.trim().toLowerCase(),
       note: box.querySelector('[name=note]').value.trim(),
-      perms:$$('[data-grant]:checked').map(e=>e.dataset.grant),
+      dashKind: box.querySelector('[name=dashKind]').value,
+      perms: $$('#unitPerms [data-p]:checked').map((e) => e.dataset.p),
       memberIds: $$('#memberBox [data-m]:checked').map((e) => e.dataset.m),
     };
     if (editing && init.code !== 'legal') payload.active = !!box.querySelector('[name=active]')?.checked;

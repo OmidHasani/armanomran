@@ -1,6 +1,7 @@
 import { raw } from 'express';
 import mongoose from 'mongoose';
-import { Contract, Customer, LegalCase } from './models.js';
+import { Contract, Customer, LegalCase, Report } from './models.js';
+import { noteReportFile } from './reports.js';
 import { hasPerm, normalizeUnitIds } from './perms.js';
 import { canAccessCase, legalUnitId } from './workcases.js';
 import { AppError } from './validate.js';
@@ -24,6 +25,8 @@ function canMutateFiles(user, kind) {
   if (kind === 'workcase') {
     return hasPerm(user, 'inbox') || hasPerm(user, 'legal') || normalizeUnitIds(user.unitIds).length > 0;
   }
+  if (kind === 'contract') return hasPerm(user, 'cont_edit');
+  if (kind === 'customer') return hasPerm(user, 'cust_write');
   return false;
 }
 
@@ -31,6 +34,16 @@ export function mountFiles(api, auth, wrap) {
   const base = '/files/:kind/:parent';
   const access = wrap(async (req, res, next) => {
     const { kind, parent } = req.params;
+
+    if (kind === 'report') {
+      if (!hasPerm(req.user, 'brief')) throw new AppError('اجازه دسترسی ندارید', 403);
+      const report = await Report.findById(parent).select('authorId').lean();
+      if (!report) throw new AppError('گزارش پیدا نشد', 404);
+      if (req.method !== 'GET' && String(report.authorId) !== String(req.user._id)) {
+        throw new AppError('فقط نویسنده می‌تواند پیوست این گزارش را تغییر دهد', 403);
+      }
+      return next();
+    }
 
     if (kind === 'workcase') {
       const item = await LegalCase.findById(parent).lean();
@@ -44,8 +57,9 @@ export function mountFiles(api, auth, wrap) {
     }
 
     const model = kind === 'contract' ? Contract : kind === 'customer' ? Customer : null;
-    if (!model || !hasPerm(req.user, kind === 'contract' ? 'cont' : 'cust')
-      || (req.method !== 'GET' && !hasPerm(req.user, 'write'))) {
+    const viewKey = kind === 'contract' ? 'cont' : 'cust';
+    if (!model || (!hasPerm(req.user, viewKey) && !canMutateFiles(req.user, kind))
+      || (req.method !== 'GET' && !canMutateFiles(req.user, kind))) {
       throw new AppError('اجازه دسترسی ندارید', 403);
     }
     if (!await model.exists({ _id: parent })) throw new AppError('پرونده پیدا نشد', 404);
@@ -85,6 +99,7 @@ export function mountFiles(api, auth, wrap) {
       by: req.user.name,
       date: new Date(),
     });
+    if (req.params.kind === 'report') await noteReportFile(req.user, req.params.parent, 'پیوست گزارش', name);
     res.status(201).json({ id: doc.id });
   }));
 
@@ -101,9 +116,10 @@ export function mountFiles(api, auth, wrap) {
 
   api.delete(base + '/:id', wrap(async (req, res) => {
     const { kind, parent, id } = req.params;
-    if (!mongoose.isObjectIdOrHexString(id) || !(await DossierFile.deleteOne({ _id: id, kind, parent })).deletedCount) {
-      throw new AppError('فایل پیدا نشد', 404);
-    }
+    const existing = mongoose.isObjectIdOrHexString(id) && await DossierFile.findOne({ _id: id, kind, parent }).select('title');
+    if (!existing) throw new AppError('فایل پیدا نشد', 404);
+    await DossierFile.deleteOne({ _id: id, kind, parent });
+    if (kind === 'report') await noteReportFile(req.user, parent, 'حذف پیوست گزارش', existing.title);
     res.json({ ok: true });
   }));
 }

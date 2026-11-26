@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { LegalCase, OrgUnit, User } from './models.js';
-import { PERM_DEFS,normalizeUnitIds } from './perms.js';
+import { PERM_DEFS, normalizeDashKind, normalizeUnitIds } from './perms.js';
 import { AppError } from './validate.js';
 import { uid } from './dates.js';
 
@@ -12,6 +12,7 @@ export function serializeUnit(doc) {
     id: String(doc._id),
     name: doc.name || '',
     perms:doc.perms||[],
+    dashKind:normalizeDashKind(doc.dashKind),
     code: doc.code || '',
     note: doc.note || '',
     active: doc.active !== false,
@@ -99,6 +100,7 @@ export async function ensureLegalUnit() {
       name: 'واحد حقوقی',
       code: 'legal',
       note: 'ارجاع معوقات و پرونده‌های حقوقی',
+      dashKind: 'legal',
       active: true,
       memberIds: [],
       headId: '',
@@ -123,6 +125,7 @@ export async function ensureLegalUnit() {
   }).select('_id').lean();
   const merged = [...new Set([...legalMemberIds, ...extras.map((u) => String(u._id))])];
   unit.memberIds = merged;
+  if (!normalizeDashKind(unit.dashKind)) unit.dashKind = 'legal';
   unit.updatedAt = now;
   await unit.save();
   return serializeUnit(unit.toObject ? unit.toObject() : unit);
@@ -163,6 +166,7 @@ export async function createUnit(body) {
       name,
       code,
       perms:PERM_DEFS.filter(p=>p.k!=='admin'&&body?.perms?.includes(p.k)).map(p=>p.k),
+      dashKind:normalizeDashKind(body?.dashKind),
       note: note.slice(0, 1000),
       active,
       memberIds,
@@ -182,6 +186,7 @@ export async function updateUnit(id, body) {
   const unit = await OrgUnit.findById(id);
   if (!unit) throw new AppError('واحد سازمانی پیدا نشد', 404);
   if(Array.isArray(body?.perms))unit.perms=PERM_DEFS.filter(p=>p.k!=='admin'&&body.perms.includes(p.k)).map(p=>p.k);
+  if(body?.dashKind!==undefined)unit.dashKind=normalizeDashKind(body.dashKind);
   if (body?.name != null) {
     const name = String(body.name).trim();
     if (name.length < 2 || name.length > 80) throw new AppError('نام واحد را وارد کنید');

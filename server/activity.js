@@ -1,8 +1,13 @@
 import mongoose from 'mongoose';
 import {createHash} from 'node:crypto';
 const Schema=mongoose.Schema;
-const activity=new Schema({actor:String,user:String,action:String,target:String,details:String,at:{type:Date,default:Date.now}},{versionKey:false});
-activity.index({at:-1});activity.index({user:1,_id:-1});
+const activity=new Schema({
+  actor:String,user:String,action:String,target:String,details:String,
+  kind:{type:String,default:''},
+  snapshot:Schema.Types.Mixed,
+  at:{type:Date,default:Date.now},
+},{versionKey:false});
+activity.index({at:-1});activity.index({user:1,_id:-1});activity.index({kind:1,_id:-1});
 export const Activity=mongoose.model('Activity',activity);
 const visit=new Schema({_id:String,user:String,actor:String,start:Date,last:Date,end:Date,seconds:{type:Number,default:0}},{versionKey:false});
 visit.index({last:-1});
@@ -17,6 +22,7 @@ export async function pulse(req,logout=false){
   await Visit.updateOne({_id:key(req),end:null},[{$set:{seconds:{$add:[{$ifNull:['$seconds',0]},{$cond:[{$lte:[{$subtract:[now,'$last']},90000]},{$max:[0,{$divide:[{$subtract:[now,'$last']},1000]}]},0]}]},last:now,...(logout?{end:now}:{})}}]);
 }
 export function activityMiddleware(req,res,next){
+  if(req.path.startsWith('/reports')||/^\/files\/report(\/|$)/.test(req.path))return next();
   if(req.path!=='/view-event'&&req.path!=='/presence'&&req.path!=='/admin/activity'&&(req.path!=='/state'||req.method==='GET')&&
     (req.method!=='GET'||/^\/(state$|admin\/export|files\/|contract-history\/|users$|workcases|legal\/cases)/.test(req.path))){
     res.on('finish',()=>{

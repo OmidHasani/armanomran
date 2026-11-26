@@ -69,7 +69,7 @@
           <div><span>نقدی</span><b>${money(parts.cash)}</b></div>
         </div>`}
         <p class="fd" style="margin:8px 0 0">برای تغییر این مبالغ از «ویرایش قرارداد» استفاده کنید؛ متن رسمی از همین تفکیک ساخته می‌شود.</p>
-        ${typeof can === 'function' && can('write') ? `<button type="button" class="sm btn-soft" onclick="closeM();editC('${c.id}')">ویرایش قیمت و نحوه پرداخت</button>` : ''}
+        ${typeof canAct === 'function' && canAct('cont_edit') ? `<button type="button" class="sm btn-soft" onclick="closeM();editC('${c.id}')">ویرایش قیمت و نحوه پرداخت</button>` : ''}
       </div>
     </div>`;
   }

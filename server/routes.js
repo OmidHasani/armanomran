@@ -3,6 +3,7 @@ import {Activity,Visit,activityMiddleware,enter,pulse} from './activity.js';
 import {scopedState} from './state-access.js';
 import {ContractEvent} from './contract-history.js';
 import {mountFiles} from './files.js';
+import {mountReports} from './reports.js';
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -25,7 +26,10 @@ import {
 } from './legal.js';
 import { User, LegalCase } from './models.js';
 import {
+  DASH_KINDS,
+  canSaveState,
   hasPerm,
+  normalizeDashKind,
   normalizePerms,
   normalizeRole,
   normalizeUnitIds,
@@ -74,8 +78,10 @@ const loginLimit = rateLimit({
 });
 
 async function unitAccess(user){
-  const units=await MembershipUnit.find({_id:{$in:user.unitIds||[]},active:true}).select('perms').lean();
+  const units=await MembershipUnit.find({_id:{$in:user.unitIds||[]},active:true}).select('perms dashKind').lean();
   user.$locals.unitPerms=[...new Set(units.flatMap(u=>u.perms||[]))].filter(p=>p!=='admin');
+  const kinds=units.map(u=>normalizeDashKind(u.dashKind)).filter(Boolean);
+  user.$locals.dashKind=kinds.includes('legal')?'legal':kinds.includes('contracts')?'contracts':kinds.includes('manage')?'manage':'';
 }
 async function requireAuth(req, res, next) {
   try {
@@ -122,6 +128,7 @@ api.get('/meta/options', (req, res) => {
     roles: ROLES,
     perms: PERM_DEFS,
     roleDefaults: ROLE_DEFAULTS,
+    dashKinds: DASH_KINDS,
     caseStatus: CASE_STATUS,
     caseKinds: CASE_KINDS,
     followActions: FOLLOW_ACTIONS,
@@ -175,10 +182,15 @@ api.post('/view-event',requireAuth,wrap(async(req,res)=>{
 }));
 api.post('/presence',requireAuth,wrap(async(req,res)=>{await pulse(req);res.sendStatus(204)}));
 api.get('/admin/activity',requireAuth,requirePerm('admin'),wrap(async(req,res)=>{
-  const filter=req.query.user?{user:String(req.query.user)}:{};
+  const filter=req.query.user?{user:String(req.query.user).slice(0,80)}:{};
   const cursor=req.query.before;
+  const before=mongoose.isValidObjectId(cursor)?{_id:{$lt:cursor}}:{};
+  if(req.query.kind==='report'){
+    const events=await Activity.find({...filter,kind:'report',...before}).sort({_id:-1}).limit(51).lean();
+    return res.json({events:events.slice(0,50),more:events.length>50,now:new Date()});
+  }
   const sessionPage=Math.max(0,Math.min(100000,Number.parseInt(req.query.sessionPage)||0));
-  const events=await Activity.find({...filter,...(mongoose.isValidObjectId(cursor)?{_id:{$lt:cursor}}:{})}).sort({_id:-1}).limit(51).lean();
+  const events=await Activity.find({...filter,...before}).sort({_id:-1}).limit(51).lean();
   const sessions=await Visit.find(filter,{_id:0}).sort({last:-1}).skip(sessionPage*30).limit(31).lean();
   res.json({events:events.slice(0,50),more:events.length>50,sessions:sessions.slice(0,30),moreSessions:sessions.length>30,now:new Date()});
 }));
@@ -198,6 +210,7 @@ api.post('/auth/password', requireAuth, wrap(async (req, res) => {
 }));
 
 mountFiles(api,requireAuth,wrap);
+mountReports(api,requireAuth,wrap);
 api.get('/contract-history/:id',requireAuth,requirePerm('cont'),wrap(async(req,res)=>{
   const before=Number(req.query.before)||Number.MAX_SAFE_INTEGER;
   res.json(await ContractEvent.find({contract:req.params.id,version:{$lt:before}}).sort({version:-1}).limit(30).lean());
@@ -210,9 +223,7 @@ api.get('/state', requireAuth, wrap(async (req, res) => {
 }));
 
 api.put('/state', requireAuth, wrap(async (req, res) => {
-  if (!hasPerm(req.user, 'write') && !hasPerm(req.user, 'acct') && !hasPerm(req.user, 'admin')) {
-    throw new AppError('اجازه ثبت و ویرایش ندارید', 403);
-  }
+  if (!canSaveState(req.user)) throw new AppError('اجازه ثبت و ویرایش ندارید', 403);
   const version = Number(req.body?.version ?? 0);
   if (!Number.isInteger(version) || version < 0) throw new AppError('نسخه داده‌ها نامعتبر است');
   const saved = await saveState(req.user, version, req.body?.data);
@@ -265,11 +276,23 @@ api.delete('/units/:id', requireAuth, requirePerm('admin'), wrap(async (req, res
 }));
 
 api.get('/users', requireAuth, requirePerm('admin'), wrap(async (req, res) => {
-  const users = await User.find().sort({ createdAt: 1 }).select('-passwordHash').lean();
-  res.json(users.map((user) => ({
-    ...publicUser(user),
-    lastLoginAt: user.lastLoginAt || null,
-  })));
+  const [users, units] = await Promise.all([
+    User.find().sort({ createdAt: 1 }).select('-passwordHash').lean(),
+    MembershipUnit.find({ active: true }).select('perms dashKind').lean(),
+  ]);
+  const byId = new Map(units.map((u) => [String(u._id), u]));
+  res.json(users.map((user) => {
+    const mine = (user.unitIds || []).map((id) => byId.get(String(id))).filter(Boolean);
+    const kinds = mine.map((u) => normalizeDashKind(u.dashKind)).filter(Boolean);
+    user.$locals = {
+      unitPerms: [...new Set(mine.flatMap((u) => u.perms || []))].filter((p) => p !== 'admin'),
+      dashKind: kinds.includes('legal') ? 'legal' : kinds.includes('contracts') ? 'contracts' : kinds.includes('manage') ? 'manage' : '',
+    };
+    return {
+      ...publicUser(user),
+      lastLoginAt: user.lastLoginAt || null,
+    };
+  }));
 }));
 
 api.get('/users/directory', requireAuth, wrap(async (req, res) => {
@@ -306,10 +329,12 @@ api.post('/users', requireAuth, requirePerm('admin'), wrap(async (req, res) => {
       unitIds,
       active,
       jobTitle:String(req.body.jobTitle||'').slice(0,100),phone:String(req.body.phone||'').slice(0,40),
+      dashKind: normalizeDashKind(req.body?.dashKind),
       passwordHash: await bcrypt.hash(password, 12),
     });
     await applyUserUnitMembership(user);
     const fresh = await User.findById(user._id);
+    await unitAccess(fresh);
     res.status(201).json(publicUser(fresh));
   } catch (err) {
     if (err?.code === 11000) throw new AppError('این نام کاربری وجود دارد', 409);
@@ -328,6 +353,7 @@ api.put('/users/:id', requireAuth, requirePerm('admin'), wrap(async (req, res) =
     const admins = await User.countDocuments({ role: 'admin' });
     if (admins <= 1) throw new AppError('نقش آخرین مدیر را نمی‌توان تغییر داد');
   }
+  if(req.body.dashKind!==undefined)user.dashKind=normalizeDashKind(req.body.dashKind);
   if(req.body.jobTitle!==undefined)user.jobTitle=String(req.body.jobTitle).slice(0,100);
   if(req.body.phone!==undefined)user.phone=String(req.body.phone).slice(0,40);
   user.name = name;
@@ -352,6 +378,7 @@ api.put('/users/:id', requireAuth, requirePerm('admin'), wrap(async (req, res) =
   await user.save();
   await applyUserUnitMembership(user);
   const fresh = await User.findById(user._id);
+  await unitAccess(fresh);
   res.json(publicUser(fresh));
 }));
 
